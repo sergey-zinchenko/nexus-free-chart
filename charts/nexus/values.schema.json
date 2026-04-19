@@ -1,0 +1,765 @@
+{
+  "$schema": "http://json-schema.org/schema#",
+  "type": "object",
+  "properties": {
+    "pvc": {
+      "type": "object",
+      "properties": {
+        "storage": {
+          "type": "string",
+          "pattern": "^[0-9]+(Mi|Gi|Ti)$"
+        },
+        "accessModes": { "type": "string" },
+        "volumeClaimTemplate": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "existingClaim": { "type": ["string", "null"] }
+      }
+    },
+    "statefulset": {
+      "type": "object",
+      "properties": {
+        "updateStrategy": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["RollingUpdate", "OnDelete"]
+            }
+          },
+          "required": ["type"]
+        },
+        "container": {
+          "type": "object",
+          "properties": {
+            "image": {
+              "type": "object",
+              "properties": {
+                "nexusTag": {
+                  "type": "string",
+                  "pattern": "^(3\\.(7[0-9]|[89][0-9])\\..+|[4-9]\\..+)$"
+                }
+              }
+            },
+            "containerPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "env": {
+              "type": "object",
+              "properties": {
+                "nexusDBPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                "dbHost": { "type": ["string", "null"] }
+              }
+            }
+          }
+        }
+      }
+    },
+    "secret": {
+      "type": "object",
+      "properties": {
+        "existingDbSecret": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "name": { "type": "string" },
+            "usernameKey": { "type": "string", "minLength": 1 },
+            "passwordKey": { "type": "string", "minLength": 1 }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "enabled": { "const": true } },
+                "required": ["enabled"]
+              },
+              "then": {
+                "required": ["name"],
+                "properties": {
+                  "name": { "minLength": 1 }
+                }
+              }
+            }
+          ]
+        },
+        "nexusAdminSecret": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "adminPassword": { "type": "string" },
+            "existingSecret": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "name": { "type": "string" },
+                "key": { "type": "string", "minLength": 1 }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": { "enabled": { "const": true } },
+                    "required": ["enabled"]
+                  },
+                  "then": {
+                    "required": ["name", "key"],
+                    "properties": {
+                      "name": { "minLength": 1 }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "nexusSecret": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "name": { "type": "string" },
+            "key": { "type": "string", "minLength": 1 },
+            "mountPath": { "type": "string", "minLength": 1 },
+            "secretKeyfile": { "type": "string" },
+            "existingSecret": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "name": { "type": "string" },
+                "key": { "type": "string", "minLength": 1 }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": { "enabled": { "const": true } },
+                    "required": ["enabled"]
+                  },
+                  "then": {
+                    "required": ["name", "key"],
+                    "properties": {
+                      "name": { "minLength": 1 }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "enabled": { "const": true },
+                  "existingSecret": {
+                    "properties": {
+                      "enabled": { "const": false }
+                    },
+                    "required": ["enabled"]
+                  }
+                },
+                "required": ["enabled"]
+              },
+              "then": {
+                "required": ["key", "mountPath", "secretKeyfile"]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": { "type": ["integer", "string"] }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "allowSameNamespace": { "type": "boolean" },
+        "ingressFrom": { "type": "array" },
+        "egress": {
+          "type": "object",
+          "properties": {
+            "allowDns": { "type": "boolean" },
+            "allowPostgresql": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "properties": {
+        "serviceMonitor": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "namespace": { "type": ["string", "null"] },
+            "labels": { "type": "object" },
+            "interval": { "type": "string" },
+            "scrapeTimeout": { "type": "string" },
+            "path": { "type": "string" },
+            "scheme": { "type": "string", "enum": ["http", "https"] },
+            "honorLabels": { "type": "boolean" },
+            "relabelings": { "type": "array" },
+            "metricRelabelings": { "type": "array" },
+            "tlsConfig": { "type": "object" }
+          }
+        },
+        "prometheusRule": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "namespace": { "type": ["string", "null"] },
+            "labels": { "type": "object" },
+            "severity": { "type": "string" },
+            "for": { "type": "string" },
+            "restartThreshold": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "bootstrap": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "backoffLimit": { "type": "integer", "minimum": 0 },
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
+        "anonymousAccess": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "repositoryCleanup": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "repositories": {
+          "type": "object",
+          "properties": {
+            "pypiProxy": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "remoteUrl": { "type": "string", "minLength": 1 },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "blobStoreName": { "type": "string" },
+                  "online": { "type": "boolean" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "contentMaxAge": { "type": "integer", "minimum": -1 },
+                  "metadataMaxAge": { "type": "integer", "minimum": -1 },
+                  "negativeCacheEnabled": { "type": "boolean" },
+                  "negativeCacheTtl": { "type": "integer", "minimum": -1 },
+                  "httpClientBlocked": { "type": "boolean" },
+                  "httpClientAutoBlock": { "type": "boolean" }
+                },
+                "required": ["name", "remoteUrl"]
+              }
+            },
+            "pypiHosted": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "blobStoreName": { "type": "string" },
+                  "online": { "type": "boolean" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "writePolicy": { "type": "string", "enum": ["ALLOW", "ALLOW_ONCE", "DENY"] }
+                },
+                "required": ["name"]
+              }
+            },
+            "pypiGroup": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "memberNames": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 },
+                    "minItems": 1
+                  },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "blobStoreName": { "type": "string" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "online": { "type": "boolean" }
+                },
+                "required": ["name", "memberNames"]
+              }
+            },
+            "npmProxy": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "remoteUrl": { "type": "string", "minLength": 1 },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "blobStoreName": { "type": "string" },
+                  "online": { "type": "boolean" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "contentMaxAge": { "type": "integer", "minimum": -1 },
+                  "metadataMaxAge": { "type": "integer", "minimum": -1 },
+                  "negativeCacheEnabled": { "type": "boolean" },
+                  "negativeCacheTtl": { "type": "integer", "minimum": -1 },
+                  "httpClientBlocked": { "type": "boolean" },
+                  "httpClientAutoBlock": { "type": "boolean" }
+                },
+                "required": ["name", "remoteUrl"]
+              }
+            },
+            "npmHosted": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "blobStoreName": { "type": "string" },
+                  "online": { "type": "boolean" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "writePolicy": { "type": "string", "enum": ["ALLOW", "ALLOW_ONCE", "DENY"] }
+                },
+                "required": ["name"]
+              }
+            },
+            "npmGroup": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "memberNames": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 },
+                    "minItems": 1
+                  },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "blobStoreName": { "type": "string" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "online": { "type": "boolean" }
+                },
+                "required": ["name", "memberNames"]
+              }
+            },
+            "dockerProxy": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "remoteUrl": { "type": "string", "minLength": 1 },
+                  "host": { "type": "string", "minLength": 1 },
+                  "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                  "targetPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "secretName": { "type": "string" },
+                  "annotations": { "type": "object" },
+                  "blobStoreName": { "type": "string" },
+                  "online": { "type": "boolean" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "contentMaxAge": { "type": "integer", "minimum": -1 },
+                  "metadataMaxAge": { "type": "integer", "minimum": -1 },
+                  "negativeCacheEnabled": { "type": "boolean" },
+                  "negativeCacheTtl": { "type": "integer", "minimum": -1 },
+                  "httpClientBlocked": { "type": "boolean" },
+                  "httpClientAutoBlock": { "type": "boolean" },
+                  "httpsPort": { "type": ["integer", "null"], "minimum": 1, "maximum": 65535 },
+                  "v1Enabled": { "type": "boolean" },
+                  "forceBasicAuth": { "type": "boolean" },
+                  "indexType": { "type": "string", "enum": ["HUB", "REGISTRY"] },
+                  "cacheForeignLayers": { "type": "boolean" },
+                  "foreignLayerUrlWhitelist": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  }
+                },
+                "required": ["name", "remoteUrl", "host", "port", "targetPort"]
+              }
+            },
+            "dockerHosted": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "host": { "type": "string", "minLength": 1 },
+                  "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                  "targetPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                  "secretName": { "type": "string" },
+                  "annotations": { "type": "object" },
+                  "blobStoreName": { "type": "string" },
+                  "online": { "type": "boolean" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "writePolicy": { "type": "string", "enum": ["ALLOW", "ALLOW_ONCE", "DENY"] },
+                  "httpsPort": { "type": ["integer", "null"], "minimum": 1, "maximum": 65535 },
+                  "v1Enabled": { "type": "boolean" },
+                  "forceBasicAuth": { "type": "boolean" }
+                },
+                "required": ["name", "host", "port", "targetPort", "secretName"]
+              }
+            },
+            "dockerGroup": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "memberNames": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 },
+                    "minItems": 1
+                  },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "host": { "type": "string", "minLength": 1 },
+                  "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                  "targetPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                  "secretName": { "type": "string", "minLength": 1 },
+                  "annotations": { "type": "object" },
+                  "blobStoreName": { "type": "string" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "online": { "type": "boolean" },
+                  "v1Enabled": { "type": "boolean" },
+                  "forceBasicAuth": { "type": "boolean" },
+                  "httpsPort": { "type": ["integer", "null"], "minimum": 1, "maximum": 65535 }
+                },
+                "required": ["name", "memberNames", "host", "port", "targetPort", "secretName"]
+              }
+            },
+            "nugetProxy": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "remoteUrl": { "type": "string", "minLength": 1 },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "queryCacheItemMaxAge": { "type": "integer", "minimum": -1 },
+                  "nugetVersion": { "type": "string", "enum": ["V2", "V3"] },
+                  "blobStoreName": { "type": "string" },
+                  "online": { "type": "boolean" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "contentMaxAge": { "type": "integer", "minimum": -1 },
+                  "metadataMaxAge": { "type": "integer", "minimum": -1 },
+                  "negativeCacheEnabled": { "type": "boolean" },
+                  "negativeCacheTtl": { "type": "integer", "minimum": -1 },
+                  "httpClientBlocked": { "type": "boolean" },
+                  "httpClientAutoBlock": { "type": "boolean" }
+                },
+                "required": ["name", "remoteUrl"]
+              }
+            },
+            "nugetHosted": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "nugetVersion": { "type": "string", "enum": ["V2", "V3"] },
+                  "blobStoreName": { "type": "string" },
+                  "online": { "type": "boolean" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "writePolicy": { "type": "string", "enum": ["ALLOW", "ALLOW_ONCE", "DENY"] }
+                },
+                "required": ["name"]
+              }
+            },
+            "nugetGroup": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "memberNames": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 },
+                    "minItems": 1
+                  },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "blobStoreName": { "type": "string" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "online": { "type": "boolean" }
+                },
+                "required": ["name", "memberNames"]
+              }
+            },
+            "mavenProxy": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "remoteUrl": { "type": "string", "minLength": 1 },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "blobStoreName": { "type": "string" },
+                  "online": { "type": "boolean" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "versionPolicy": { "type": "string", "enum": ["RELEASE", "SNAPSHOT", "MIXED"] },
+                  "layoutPolicy": { "type": "string", "enum": ["STRICT", "PERMISSIVE"] },
+                  "contentMaxAge": { "type": "integer", "minimum": -1 },
+                  "metadataMaxAge": { "type": "integer", "minimum": -1 },
+                  "negativeCacheEnabled": { "type": "boolean" },
+                  "negativeCacheTtl": { "type": "integer", "minimum": -1 },
+                  "httpClientBlocked": { "type": "boolean" },
+                  "httpClientAutoBlock": { "type": "boolean" },
+                  "username": { "type": "string", "minLength": 1 },
+                  "passwordFromSecret": {
+                    "type": "object",
+                    "properties": {
+                      "name": { "type": "string", "minLength": 1 },
+                      "key": { "type": "string", "minLength": 1 }
+                    }
+                  }
+                },
+                "required": ["name", "remoteUrl"]
+              }
+            },
+            "mavenHosted": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "blobStoreName": { "type": "string" },
+                  "online": { "type": "boolean" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "versionPolicy": { "type": "string", "enum": ["RELEASE", "SNAPSHOT", "MIXED"] },
+                  "layoutPolicy": { "type": "string", "enum": ["STRICT", "PERMISSIVE"] },
+                  "writePolicy": { "type": "string", "enum": ["ALLOW", "ALLOW_ONCE", "DENY"] }
+                },
+                "required": ["name"]
+              }
+            },
+            "mavenGroup": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "memberNames": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 },
+                    "minItems": 1
+                  },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "blobStoreName": { "type": "string" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "online": { "type": "boolean" },
+                  "versionPolicy": { "type": "string", "enum": ["RELEASE", "SNAPSHOT", "MIXED"] },
+                  "layoutPolicy": { "type": "string", "enum": ["STRICT", "PERMISSIVE"] }
+                },
+                "required": ["name", "memberNames"]
+              }
+            },
+            "huggingfaceProxy": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "remoteUrl": { "type": "string", "minLength": 1 },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "bearerTokenFromSecret": {
+                    "type": "object",
+                    "properties": {
+                      "name": { "type": "string", "minLength": 1 },
+                      "key": { "type": "string", "minLength": 1 }
+                    },
+                    "required": ["name", "key"]
+                  },
+                  "blobStoreName": { "type": "string" },
+                  "online": { "type": "boolean" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "contentMaxAge": { "type": "integer", "minimum": -1 },
+                  "metadataMaxAge": { "type": "integer", "minimum": -1 },
+                  "negativeCacheEnabled": { "type": "boolean" },
+                  "negativeCacheTtl": { "type": "integer", "minimum": -1 },
+                  "httpClientBlocked": { "type": "boolean" },
+                  "httpClientAutoBlock": { "type": "boolean" }
+                },
+                "required": ["name", "remoteUrl"]
+              }
+            },
+            "rawHosted": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "blobStoreName": { "type": "string" },
+                  "online": { "type": "boolean" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "writePolicy": { "type": "string", "enum": ["ALLOW", "ALLOW_ONCE", "DENY"] }
+                },
+                "required": ["name"]
+              }
+            },
+            "rawProxy": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "remoteUrl": { "type": "string", "minLength": 1 },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "blobStoreName": { "type": "string" },
+                  "online": { "type": "boolean" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "contentMaxAge": { "type": "integer", "minimum": -1 },
+                  "metadataMaxAge": { "type": "integer", "minimum": -1 },
+                  "negativeCacheEnabled": { "type": "boolean" },
+                  "negativeCacheTtl": { "type": "integer", "minimum": -1 },
+                  "httpClientBlocked": { "type": "boolean" },
+                  "httpClientAutoBlock": { "type": "boolean" }
+                },
+                "required": ["name", "remoteUrl"]
+              }
+            },
+            "rawGroup": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "memberNames": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 },
+                    "minItems": 1
+                  },
+                  "allowAnonymousAccess": { "type": "boolean" },
+                  "blobStoreName": { "type": "string" },
+                  "strictContentTypeValidation": { "type": "boolean" },
+                  "online": { "type": "boolean" }
+                },
+                "required": ["name", "memberNames"]
+              }
+            }
+          }
+        },
+        "users": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "userId": { "type": "string", "minLength": 1 },
+              "firstName": { "type": "string", "minLength": 1 },
+              "lastName": { "type": "string", "minLength": 1 },
+              "emailAddress": { "type": "string", "minLength": 1 },
+              "status": { "type": "string", "enum": ["active", "disabled"] },
+              "isAdmin": { "type": "boolean" },
+              "password": { "type": "string" },
+              "roles": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "passwordFromSecret": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "key": { "type": "string", "minLength": 1 }
+                }
+              },
+              "repositoryAccess": {
+                "type": "object",
+                "properties": {
+                  "pypi": {
+                    "type": "object",
+                    "additionalProperties": { "type": "boolean" }
+                  },
+                  "npm": {
+                    "type": "object",
+                    "additionalProperties": { "type": "boolean" }
+                  },
+                  "docker": {
+                    "type": "object",
+                    "additionalProperties": { "type": "boolean" }
+                  },
+                  "huggingface": {
+                    "type": "object",
+                    "additionalProperties": { "type": "boolean" }
+                  },
+                  "nuget": {
+                    "type": "object",
+                    "additionalProperties": { "type": "boolean" }
+                  },
+                  "maven": {
+                    "type": "object",
+                    "additionalProperties": { "type": "boolean" }
+                  },
+                  "raw": {
+                    "type": "object",
+                    "additionalProperties": { "type": "boolean" }
+                  }
+                }
+              }
+            },
+            "required": ["userId", "firstName", "lastName", "emailAddress"]
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "annotations": { "type": "object" },
+        "docker": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "annotations": { "type": "object" }
+          }
+        }
+      }
+    },
+    "postgresql": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "database": { "type": "string", "minLength": 1 },
+        "username": { "type": "string", "minLength": 1 },
+        "password": { "type": "string" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "configuration": { "type": ["string", "null"] },
+        "resources": { "type": "object" },
+        "persistence": { "type": "object" },
+        "image": {
+          "type": "object",
+          "properties": {
+            "registry": { "type": "string" },
+            "repository": { "type": "string" },
+            "tag": { "type": "string" }
+          }
+        },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "database": { "type": "string", "minLength": 1 },
+            "username": { "type": "string", "minLength": 1 },
+            "password": { "type": "string" }
+          },
+          "required": ["database", "username"]
+        }
+      }
+    }
+  }
+}

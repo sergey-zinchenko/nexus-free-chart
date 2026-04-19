@@ -1,0 +1,6 @@
+dependencies:
+- name: postgres
+  repository: https://charts.fossa.com
+  version: 2.1.0
+digest: sha256:01d0b37b04732c09a9b81d99ce0af2c333583da5f6d91e158479bee2546e714c
+generated: "2026-03-22T21:41:55.4912344+03:00"

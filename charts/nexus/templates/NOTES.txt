@@ -1,0 +1,195 @@
+{{- $nexusUrl := "" -}}
+{{- if and .Values.ingress.enabled .Values.ingress.host -}}
+{{- $nexusUrl = printf "https://%s" .Values.ingress.host -}}
+{{- else if and .Values.service.nexus.enabled (eq .Values.service.nexus.type "NodePort") -}}
+{{- $nexusUrl = printf "http://<node-ip>:%v" .Values.service.nexus.port -}}
+{{- else -}}
+{{- $nexusUrl = printf "http://%s:8081" (printf "%s-hl" (include "nexus.fullname" .)) -}}
+{{- end }}
+
+{{- $repositoryEndpoints := list -}}
+{{- range $repo := .Values.bootstrap.repositories.pypiProxy -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "pypi/%s: %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.pypiHosted -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "pypi/%s (hosted): %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.pypiGroup -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "pypi/%s (group): %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.npmProxy -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "npm/%s: %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.npmHosted -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "npm/%s (hosted): %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.npmGroup -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "npm/%s (group): %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.nugetProxy -}}
+{{- if eq (default "V3" $repo.nugetVersion) "V3" -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "nuget/%s: %s/repository/%s/index.json" $repo.name $nexusUrl $repo.name) -}}
+{{- else -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "nuget/%s: %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.nugetHosted -}}
+{{- if eq (default "V3" $repo.nugetVersion) "V3" -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "nuget/%s (hosted): %s/repository/%s/index.json" $repo.name $nexusUrl $repo.name) -}}
+{{- else -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "nuget/%s (hosted): %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.nugetGroup -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "nuget/%s (group): %s/repository/%s/index.json" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.mavenProxy -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "maven/%s: %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.mavenHosted -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "maven/%s (hosted): %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.mavenGroup -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "maven/%s (group): %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.huggingfaceProxy -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "huggingface/%s: %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.rawHosted -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "raw/%s (hosted): %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.rawProxy -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "raw/%s: %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.rawGroup -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "raw/%s (group): %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.dockerProxy -}}
+{{- if and $.Values.ingress.enabled $.Values.ingress.docker.enabled $repo.host -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "docker/%s: https://%s" $repo.name $repo.host) -}}
+{{- else -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "docker/%s: %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.dockerHosted -}}
+{{- if and $.Values.ingress.enabled $.Values.ingress.docker.enabled $repo.host -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "docker/%s (hosted): https://%s" $repo.name $repo.host) -}}
+{{- else -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "docker/%s (hosted): %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.dockerGroup -}}
+{{- if and $.Values.ingress.enabled $.Values.ingress.docker.enabled $repo.host -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "docker/%s (group): https://%s" $repo.name $repo.host) -}}
+{{- else -}}
+{{- $repositoryEndpoints = append $repositoryEndpoints (printf "docker/%s (group): %s/repository/%s/" $repo.name $nexusUrl $repo.name) -}}
+{{- end -}}
+{{- end -}}
+
+{{- $managedRepos := list -}}
+{{- range $repo := .Values.bootstrap.repositories.pypiProxy -}}
+{{- $managedRepos = append $managedRepos (printf "pypi/%s" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.pypiHosted -}}
+{{- $managedRepos = append $managedRepos (printf "pypi/%s (hosted)" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.pypiGroup -}}
+{{- $managedRepos = append $managedRepos (printf "pypi/%s (group)" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.npmProxy -}}
+{{- $managedRepos = append $managedRepos (printf "npm/%s" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.npmHosted -}}
+{{- $managedRepos = append $managedRepos (printf "npm/%s (hosted)" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.npmGroup -}}
+{{- $managedRepos = append $managedRepos (printf "npm/%s (group)" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.dockerProxy -}}
+{{- $managedRepos = append $managedRepos (printf "docker/%s" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.dockerHosted -}}
+{{- $managedRepos = append $managedRepos (printf "docker/%s (hosted)" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.dockerGroup -}}
+{{- $managedRepos = append $managedRepos (printf "docker/%s (group)" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.nugetProxy -}}
+{{- $managedRepos = append $managedRepos (printf "nuget/%s" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.nugetHosted -}}
+{{- $managedRepos = append $managedRepos (printf "nuget/%s (hosted)" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.nugetGroup -}}
+{{- $managedRepos = append $managedRepos (printf "nuget/%s (group)" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.mavenProxy -}}
+{{- $managedRepos = append $managedRepos (printf "maven/%s" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.mavenHosted -}}
+{{- $managedRepos = append $managedRepos (printf "maven/%s (hosted)" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.mavenGroup -}}
+{{- $managedRepos = append $managedRepos (printf "maven/%s (group)" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.huggingfaceProxy -}}
+{{- $managedRepos = append $managedRepos (printf "huggingface/%s" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.rawHosted -}}
+{{- $managedRepos = append $managedRepos (printf "raw/%s (hosted)" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.rawProxy -}}
+{{- $managedRepos = append $managedRepos (printf "raw/%s" $repo.name) -}}
+{{- end -}}
+{{- range $repo := .Values.bootstrap.repositories.rawGroup -}}
+{{- $managedRepos = append $managedRepos (printf "raw/%s (group)" $repo.name) -}}
+{{- end -}}
+
+Release summary for {{ .Release.Name }} (namespace {{ .Release.Namespace }})
+
+Nexus URL:
+	- {{ $nexusUrl }}
+
+Repository endpoints for package managers/tools:
+{{- if gt (len $repositoryEndpoints) 0 }}
+{{- range $endpoint := $repositoryEndpoints }}
+	- {{ $endpoint }}
+{{- end }}
+{{- else }}
+	- none
+{{- end }}
+
+{{- if .Values.bootstrap.enabled }}
+Bootstrap:
+	- enabled: true
+	- users declared: {{ len .Values.bootstrap.users }}
+	- managed repositories declared: {{ len $managedRepos }}
+
+Users to upsert:
+{{- if gt (len .Values.bootstrap.users) 0 }}
+{{- range $user := .Values.bootstrap.users }}
+	- {{ $user.userId }}
+{{- end }}
+{{- else }}
+	- none
+{{- end }}
+
+Repository cleanup (unmanaged + empty only):
+{{- if .Values.bootstrap.repositoryCleanup.enabled }}
+	- enabled: true
+{{- if gt (len $managedRepos) 0 }}
+	- expected action: delete unmanaged empty repositories
+{{- else }}
+	- expected action: skipped (no managed repositories declared)
+{{- end }}
+{{- else }}
+	- enabled: false
+{{- end }}
+{{- else }}
+Bootstrap:
+	- enabled: false
+{{- end }}
+
+Note:
+	- This summary reflects values-driven intended actions for install/upgrade/rollback.
+	- Exact runtime results are in Kubernetes Job logs and Nexus request log.

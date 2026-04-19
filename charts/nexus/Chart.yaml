@@ -1,0 +1,52 @@
+apiVersion: v2
+name: nexus-free
+version: 1.0.1
+appVersion: "3.90.1"
+kubeVersion: ">=1.25.0-0"
+description: A production-oriented Helm chart for Nexus Repository Community Edition with PostgreSQL
+home: https://github.com/sergey-zinchenko/nexus-free-chart
+icon: https://sonatype.github.io/helm3-charts/NexusRepo_Vertical.svg
+
+type: application
+
+keywords:
+  - nexus
+  - sonatype
+  - repository-manager
+  - maven
+  - docker
+
+sources:
+  - https://github.com/sergey-zinchenko/nexus-free-chart
+  - https://fossa.com/
+
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/changes: |
+    - kind: added
+      description: Added open-source release package files, examples, and release workflows.
+    - kind: changed
+      description: Updated README and publishing guidance for OCI distribution.
+  artifacthub.io/links: |
+    - name: Chart Repository
+      url: https://github.com/sergey-zinchenko/nexus-free-chart
+    - name: Issue Tracker
+      url: https://github.com/sergey-zinchenko/nexus-free-chart/issues
+    - name: Sonatype Support
+      url: https://help.sonatype.com/
+    - name: Official Nexus Product Page
+      url: https://www.sonatype.com/products/sonatype-nexus-repository
+    - name: Upstream Nexus Documentation
+      url: https://help.sonatype.com/en/sonatype-nexus-repository.html
+
+dependencies:
+  - name: postgres
+    alias: postgresql
+    version: ~2.1.0
+    repository: https://charts.fossa.com
+    condition: postgresql.enabled
+
+maintainers:
+  - name: Sergey Zinchenko
+    email: sergey.zinchenko.rnd@gmail.com
+

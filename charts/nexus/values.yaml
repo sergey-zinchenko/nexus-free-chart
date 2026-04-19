@@ -1,0 +1,396 @@
+nexus:
+  extraLabels: {}
+  properties:
+    override: {}
+  
+pvc:
+  accessModes: ReadWriteOnce
+  storage: 2Gi
+  storageClass: ""
+  volumeClaimTemplate:
+    enabled: false
+  existingClaim: null
+
+statefulset:
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate: {}
+  annotations: {}
+  podSecurityContext:
+    fsGroup: 200
+    fsGroupChangePolicy: OnRootMismatch
+  postStart:
+    command: {}
+  initContainers:
+    - name: init-nexus-log-dirs
+      image: busybox:1.33.1
+      command: [/bin/sh]
+      args:
+        - -c
+        - >-
+          mkdir -p /nexus-data/etc/logback &&
+          mkdir -p /nexus-data/log/tasks &&
+          mkdir -p /nexus-data/log/audit &&
+          touch -a /nexus-data/log/tasks/allTasks.log &&
+          touch -a /nexus-data/log/audit/audit.log &&
+          touch -a /nexus-data/log/request.log
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 200
+        runAsGroup: 200
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+      volumeMounts:
+        - name: nexus-data
+          mountPath: /nexus-data
+      resources:
+        limits:
+          cpu: "0.2"
+          memory: "512Mi"
+        requests:
+          cpu: "0.1"
+          memory: "256Mi"
+  container:
+    image:
+      repository: sonatype/nexus3
+      nexusTag: 3.90.1
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 200
+      runAsGroup: 200
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: false
+      capabilities:
+        drop:
+          - ALL
+    resources:
+      requests:
+        cpu: "1"
+        memory: "3Gi"
+      limits:
+        cpu: "2"
+        memory: "6Gi"
+    containerPort: 8081
+    pullPolicy: IfNotPresent
+    terminationGracePeriod: 120
+    env:
+      nexusDBName: nexus
+      nexusDBPort: 5432
+      dbHost: null
+      # Sonatype guidance: keep heap min/max equal, and keep heap+direct <= ~2/3 host RAM.
+      install4jAddVmParams: "-Xms3g -Xmx3g -XX:MaxDirectMemorySize=2g"
+      jdbcUrlParams: null
+    additionalEnv: []
+  requestLogContainer:
+    image:
+      repository: busybox
+      tag: 1.33.1
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 200
+      runAsGroup: 200
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+          - ALL
+    resources:
+      limits:
+        cpu: "0.2"
+        memory: "512Mi"
+      requests:
+        cpu: "0.1"
+        memory: "256Mi"
+  auditLogContainer:
+    image:
+      repository: busybox
+      tag: 1.33.1
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 200
+      runAsGroup: 200
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+          - ALL
+    resources:
+      limits:
+        cpu: "0.2"
+        memory: "512Mi"
+      requests:
+        cpu: "0.1"
+        memory: "256Mi"
+  taskLogContainer:
+    image:
+      repository: busybox
+      tag: 1.33.1
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 200
+      runAsGroup: 200
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+          - ALL
+    resources:
+      limits:
+        cpu: "0.2"
+        memory: "512Mi"
+      requests:
+        cpu: "0.1"
+        memory: "256Mi"
+  startupProbe:
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    timeoutSeconds: 1
+    failureThreshold: 180
+    path: /
+  livenessProbe:
+    initialDelaySeconds: 0
+    periodSeconds: 60
+    timeoutSeconds: 1
+    failureThreshold: 6
+    path: /
+  readinessProbe:
+    initialDelaySeconds: 0
+    periodSeconds: 60
+    timeoutSeconds: 1
+    failureThreshold: 6
+    path: /
+  imagePullSecrets:
+    secret: ""
+    existingSecret:
+      enabled: false
+      name: ""
+
+serviceAccount:
+  enabled: true
+
+secret:
+  existingDbSecret:
+    enabled: false
+    name: ""
+    usernameKey: db-user
+    passwordKey: db-password
+  nexusAdminSecret:
+    enabled: true
+    adminPassword: "change-me-before-prod"
+    existingSecret:
+      enabled: false
+      name: ""
+      key: nexus-admin-password
+  nexusSecret:
+    enabled: false
+    name: ""
+    key: secret-keys.json
+    mountPath: /nexus-data/etc/secret-keys
+    secretKeyfile: ""
+    existingSecret:
+      enabled: false
+      name: ""
+      key: secret-keys.json
+
+config:
+  enabled: false
+
+logStorage:
+  tailSecondaryLogs: true
+  combineTaskLogs: true
+
+ingress:
+  name: "nexus-ingress"
+  enabled: false
+  docker:
+    enabled: false
+    # Shared annotations applied to every Docker registry Ingress.
+    # Per-registry annotations (nexus.docker.registries[].annotations) take precedence.
+    annotations:
+      # Docker image layers can reach multiple GB — no body-size limit
+      nginx.ingress.kubernetes.io/proxy-body-size: "0"
+      # Streaming push/pull: do not spool request or response through nginx buffers
+      nginx.ingress.kubernetes.io/proxy-buffering: "off"
+      nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+      nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+      # 1 h for large multi-layer image push / pull
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+      nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+  host: null
+  hostPath: /
+  dockersubdomain: false
+  defaultRule: false
+  additionalRules: null
+  ingressClassName: null
+  annotations:
+    # --- Performance: Nexus artifact load profile ---
+    # Maven JARs, npm tarballs and raw binaries can reach several GB
+    nginx.ingress.kubernetes.io/proxy-body-size: "5g"
+    # Nexus 3 generates large response/request headers; buffers must accommodate them
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
+    nginx.ingress.kubernetes.io/proxy-buffers: "4 256k"
+    nginx.ingress.kubernetes.io/proxy-busy-buffers-size: "256k"
+    nginx.ingress.kubernetes.io/proxy-large-client-header-buffers: "4 64k"
+    # Backend is in-cluster; 10 s connect timeout is generous
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+    # 10 min for large artifact uploads / downloads
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    # Stream request body directly to Nexus — avoids spooling large uploads to nginx temp disk
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    # --- Security ---
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/hsts: "true"
+    nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
+    nginx.ingress.kubernetes.io/hsts-include-subdomains: "true"
+    # Security response headers via configuration-snippet — only works when
+    # allow-snippet-annotations: "true" is set in the ingress-nginx ConfigMap.
+    # Add to your environment-specific values if snippets are allowed:
+    # nginx.ingress.kubernetes.io/configuration-snippet: |
+    #   add_header X-Frame-Options "SAMEORIGIN" always;
+    #   add_header X-Content-Type-Options "nosniff" always;
+    #   add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    #   add_header Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()" always;
+
+service:
+  annotations: {}
+  nexus:
+    enabled: false
+    type: NodePort
+    protocol: TCP
+    port: 80
+    targetPort: 8081
+  headless:
+    annotations: {}
+    publishNotReadyAddresses: true
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+networkPolicy:
+  enabled: false
+  allowSameNamespace: true
+  ingressFrom: []
+  egress:
+    allowDns: true
+    allowPostgresql: true
+
+# Post-install/post-upgrade Job that sets a soft quota on the default blob store.
+# Use spaceUsedQuota semantics: warning triggers when USED bytes exceed limitBytes,
+# independent from Nexus-reported "available space" on the node filesystem.
+# pvc.storage is Gi/Mi string form so convert manually: 2Gi = 2147483648,
+# 50Gi = 53687091200.
+blobstoreQuota:
+  enabled: false
+  blobStoreName: "default"
+  # spaceUsedQuota: warn when used space exceeds this threshold (bytes).
+  # Set to ~90% of pvc.storage (for 2Gi: 1932735283 bytes).
+  limitBytes: 1932735283
+
+# Post-install/post-upgrade bootstrap of Nexus repositories, roles and users.
+# Implemented as a shell + curl hook Job, with no extra language runtime.
+bootstrap:
+  enabled: false
+  anonymousAccess:
+    enabled: false
+  repositoryCleanup:
+    enabled: false
+  image:
+    repository: curlimages/curl
+    tag: 8.7.1
+    pullPolicy: IfNotPresent
+  backoffLimit: 5
+  activeDeadlineSeconds: 900
+  repositories:
+    pypiProxy: []
+    pypiHosted: []
+    pypiGroup: []
+    npmProxy: []
+    npmHosted: []
+    npmGroup: []
+    dockerProxy: []
+    dockerHosted: []
+    dockerGroup: []
+    nugetProxy: []
+    nugetHosted: []
+    nugetGroup: []
+    mavenProxy: []
+    mavenHosted: []
+    mavenGroup: []
+    huggingfaceProxy: []
+    rawHosted: []
+    rawProxy: []
+    rawGroup: []
+  users: []
+
+monitoring:
+  serviceMonitor:
+    enabled: false
+    namespace: null
+    labels: {}
+    interval: 30s
+    scrapeTimeout: 10s
+    path: /service/metrics/prometheus
+    scheme: http
+    honorLabels: false
+    relabelings: []
+    metricRelabelings: []
+    tlsConfig: {}
+  prometheusRule:
+    enabled: false
+    namespace: null
+    labels: {}
+    severity: warning
+    for: 5m
+    restartThreshold: 3
+
+postgresql:
+  enabled: true
+  database: "nexus"
+  username: "nexus"
+  password: "change-me-before-prod"
+  image:
+    registry: quay.io
+    repository: fossa/postgres
+    # Keep PostgreSQL in 17.x line after migration from Bitnami.
+    tag: "17.2-1"
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1"
+  persistence:
+    storageClass: ""
+    size: 200Gi
+  configuration: |
+    shared_preload_libraries = 'pg_trgm'
+    # Single-node Nexus + headroom for admin tools.
+    max_connections = 150
+    shared_buffers = 512MB
+    effective_cache_size = 1536MB
+    maintenance_work_mem = 128MB
+    checkpoint_completion_target = 0.9
+    wal_buffers = 16MB
+    default_statistics_target = 100
+    random_page_cost = 1.1
+    effective_io_concurrency = 200
+    work_mem = 10MB
+    min_wal_size = 512MB
+    max_wal_size = 2GB
+    max_worker_processes = 2
+    max_parallel_workers_per_gather = 1
+    max_parallel_workers = 2
+    max_parallel_maintenance_workers = 1
+
+# File descriptor note (Sonatype): keep nofile >= 65536 for Nexus process/container runtime.
+# In Kubernetes this is set at node/container-runtime level, not via chart values.

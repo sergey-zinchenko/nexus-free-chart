@@ -1,0 +1,721 @@
+{{- if .Values.bootstrap.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nexus.bootstrapConfigMapName" . }}
+  labels:
+    {{- include "nexus.labels" . | nindent 4 }}
+    {{- if .Values.nexus.extraLabels }}
+      {{- with .Values.nexus.extraLabels }}
+        {{ toYaml . | nindent 4 }}
+      {{- end }}
+    {{- end }}
+data:
+  bootstrap.sh: |
+    #!/bin/sh
+    set -eu
+
+    NEXUS_API="${NEXUS_URL}/service/rest/v1"
+    WORKDIR="/work"
+
+    mkdir -p "${WORKDIR}"
+
+    curl_json() {
+      method="$1"
+      path="$2"
+      expected="$3"
+      payload_file="${4:-}"
+
+      if [ -n "${payload_file}" ]; then
+        response=$(curl -sS -w '\n%{http_code}' --max-time 60 \
+          -u "admin:${NEXUS_ADMIN_PASSWORD}" \
+          -H "Content-Type: application/json" \
+          -X "${method}" "${NEXUS_API}${path}" \
+          --data-binary "@${payload_file}")
+      else
+        response=$(curl -sS -w '\n%{http_code}' --max-time 60 \
+          -u "admin:${NEXUS_ADMIN_PASSWORD}" \
+          -X "${method}" "${NEXUS_API}${path}")
+      fi
+
+      status=$(printf '%s\n' "${response}" | tail -n 1)
+      body=$(printf '%s\n' "${response}" | sed '$d')
+
+      case " ${expected} " in
+        *" ${status} "*)
+          echo "${method} ${path} -> HTTP ${status}"
+          return 0
+          ;;
+      esac
+
+      echo "ERROR: ${method} ${path} returned HTTP ${status}" >&2
+      if [ -n "${body}" ]; then
+        echo "${body}" >&2
+      fi
+      return 1
+    }
+
+    resource_exists() {
+      path="$1"
+      curl -sf -o /dev/null --max-time 30 \
+        -u "admin:${NEXUS_ADMIN_PASSWORD}" \
+        "${NEXUS_API}${path}"
+    }
+
+    json_escape() {
+      printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+    }
+
+    wait_for_nexus() {
+      elapsed=0
+      until curl -sf -o /dev/null "${NEXUS_API}/status/writable"; do
+        elapsed=$((elapsed + 15))
+        if [ "${elapsed}" -ge 900 ]; then
+          echo "ERROR: Nexus did not become writable within 900 seconds" >&2
+          exit 1
+        fi
+        echo "Waiting for Nexus writable status... ${elapsed}s"
+        sleep 15
+      done
+    }
+
+    upsert_json_resource() {
+      exists_path="$1"
+      create_path="$2"
+      update_path="$3"
+      payload_file="$4"
+      description="$5"
+
+      if resource_exists "${exists_path}"; then
+        echo "Updating ${description}"
+        curl_json PUT "${update_path}" "200 204" "${payload_file}"
+      else
+        echo "Creating ${description}"
+        curl_json POST "${create_path}" "200 201 204" "${payload_file}"
+      fi
+    }
+
+    wait_for_nexus
+
+    # Activate Docker Bearer Token realm (required for docker login)
+    echo '["NexusAuthenticatingRealm","DockerToken"]' > "${WORKDIR}/realms.json"
+    curl_json PUT "/security/realms/active" "204" "${WORKDIR}/realms.json"
+
+{{- range $repo := .Values.bootstrap.repositories.pypiProxy }}
+
+    cat > "${WORKDIR}/repo-pypi-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation)) "proxy" (dict "remoteUrl" $repo.remoteUrl "contentMaxAge" (default 1440 $repo.contentMaxAge) "metadataMaxAge" (default 1440 $repo.metadataMaxAge)) "negativeCache" (dict "enabled" (default true $repo.negativeCacheEnabled) "timeToLive" (default 1440 $repo.negativeCacheTtl)) "httpClient" (dict "blocked" (default false $repo.httpClientBlocked) "autoBlock" (default true $repo.httpClientAutoBlock)) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/pypi/proxy/{{ $repo.name }}" "/repositories/pypi/proxy" "/repositories/pypi/proxy/{{ $repo.name }}" "${WORKDIR}/repo-pypi-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "pypi proxy repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-pypi-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "pypi" "name" $repo.name "access" "read")) "name" (printf "Helm read access for PyPI repository %s" $repo.name) "description" (printf "Read-only access to PyPI repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-pypi-%s-browse" $repo.name) (printf "nx-repository-view-pypi-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "pypi" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "pypi" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-pypi-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for pypi repository {{ $repo.name }}"
+{{- end }}
+  {{- range $repo := .Values.bootstrap.repositories.pypiHosted }}
+
+    cat > "${WORKDIR}/repo-pypi-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation) "writePolicy" (default "ALLOW" $repo.writePolicy)) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/pypi/hosted/{{ $repo.name }}" "/repositories/pypi/hosted" "/repositories/pypi/hosted/{{ $repo.name }}" "${WORKDIR}/repo-pypi-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "pypi hosted repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-pypi-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "pypi" "name" $repo.name "access" "read")) "name" (printf "Helm read access for PyPI repository %s" $repo.name) "description" (printf "Read-only access to PyPI repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-pypi-%s-browse" $repo.name) (printf "nx-repository-view-pypi-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "pypi" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "pypi" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-pypi-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for pypi hosted repository {{ $repo.name }}"
+  {{- end }}
+  {{- range $repo := .Values.bootstrap.repositories.pypiGroup }}
+
+    cat > "${WORKDIR}/repo-pypi-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation)) "group" (dict "memberNames" $repo.memberNames) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/pypi/group/{{ $repo.name }}" "/repositories/pypi/group" "/repositories/pypi/group/{{ $repo.name }}" "${WORKDIR}/repo-pypi-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "pypi group repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-pypi-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "pypi" "name" $repo.name "access" "read")) "name" (printf "Helm read access for PyPI repository %s" $repo.name) "description" (printf "Read-only access to PyPI repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-pypi-%s-browse" $repo.name) (printf "nx-repository-view-pypi-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "pypi" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "pypi" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-pypi-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for pypi group repository {{ $repo.name }}"
+  {{- end }}
+{{- range $repo := .Values.bootstrap.repositories.npmProxy }}
+
+    cat > "${WORKDIR}/repo-npm-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation)) "proxy" (dict "remoteUrl" $repo.remoteUrl "contentMaxAge" (default 1440 $repo.contentMaxAge) "metadataMaxAge" (default 1440 $repo.metadataMaxAge)) "negativeCache" (dict "enabled" (default true $repo.negativeCacheEnabled) "timeToLive" (default 1440 $repo.negativeCacheTtl)) "httpClient" (dict "blocked" (default false $repo.httpClientBlocked) "autoBlock" (default true $repo.httpClientAutoBlock)) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/npm/proxy/{{ $repo.name }}" "/repositories/npm/proxy" "/repositories/npm/proxy/{{ $repo.name }}" "${WORKDIR}/repo-npm-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "npm proxy repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-npm-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "npm" "name" $repo.name "access" "read")) "name" (printf "Helm read access for npm repository %s" $repo.name) "description" (printf "Read-only access to npm repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-npm-%s-browse" $repo.name) (printf "nx-repository-view-npm-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "npm" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "npm" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-npm-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for npm repository {{ $repo.name }}"
+{{- end }}
+  {{- range $repo := .Values.bootstrap.repositories.npmHosted }}
+
+    cat > "${WORKDIR}/repo-npm-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation) "writePolicy" (default "ALLOW" $repo.writePolicy)) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/npm/hosted/{{ $repo.name }}" "/repositories/npm/hosted" "/repositories/npm/hosted/{{ $repo.name }}" "${WORKDIR}/repo-npm-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "npm hosted repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-npm-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "npm" "name" $repo.name "access" "read")) "name" (printf "Helm read access for npm repository %s" $repo.name) "description" (printf "Read-only access to npm repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-npm-%s-browse" $repo.name) (printf "nx-repository-view-npm-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "npm" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "npm" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-npm-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for npm hosted repository {{ $repo.name }}"
+  {{- end }}
+  {{- range $repo := .Values.bootstrap.repositories.npmGroup }}
+
+    cat > "${WORKDIR}/repo-npm-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation)) "group" (dict "memberNames" $repo.memberNames) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/npm/group/{{ $repo.name }}" "/repositories/npm/group" "/repositories/npm/group/{{ $repo.name }}" "${WORKDIR}/repo-npm-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "npm group repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-npm-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "npm" "name" $repo.name "access" "read")) "name" (printf "Helm read access for npm repository %s" $repo.name) "description" (printf "Read-only access to npm repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-npm-%s-browse" $repo.name) (printf "nx-repository-view-npm-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "npm" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "npm" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-npm-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for npm group repository {{ $repo.name }}"
+  {{- end }}
+{{- range $repo := .Values.bootstrap.repositories.dockerProxy }}
+
+    cat > "${WORKDIR}/repo-docker-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation)) "proxy" (dict "remoteUrl" $repo.remoteUrl "contentMaxAge" (default 1440 $repo.contentMaxAge) "metadataMaxAge" (default 1440 $repo.metadataMaxAge)) "negativeCache" (dict "enabled" (default true $repo.negativeCacheEnabled) "timeToLive" (default 1440 $repo.negativeCacheTtl)) "httpClient" (dict "blocked" (default false $repo.httpClientBlocked) "autoBlock" (default true $repo.httpClientAutoBlock)) "docker" (dict "v1Enabled" (default false $repo.v1Enabled) "forceBasicAuth" (default false $repo.forceBasicAuth) "httpPort" $repo.targetPort "httpsPort" $repo.httpsPort) "dockerProxy" (dict "indexType" (default "REGISTRY" $repo.indexType) "cacheForeignLayers" (default false $repo.cacheForeignLayers) "foreignLayerUrlWhitelist" (default (list) $repo.foreignLayerUrlWhitelist)) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/docker/proxy/{{ $repo.name }}" "/repositories/docker/proxy" "/repositories/docker/proxy/{{ $repo.name }}" "${WORKDIR}/repo-docker-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "docker proxy repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-docker-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "docker" "name" $repo.name "access" "read")) "name" (printf "Helm read access for docker repository %s" $repo.name) "description" (printf "Read-only access to docker repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-docker-%s-browse" $repo.name) (printf "nx-repository-view-docker-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "docker" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "docker" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-docker-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for docker repository {{ $repo.name }}"
+{{- end }}
+  {{- range $repo := .Values.bootstrap.repositories.dockerHosted }}
+
+    cat > "${WORKDIR}/repo-docker-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation) "writePolicy" (default "ALLOW" $repo.writePolicy)) "docker" (dict "v1Enabled" (default false $repo.v1Enabled) "forceBasicAuth" (default false $repo.forceBasicAuth) "httpPort" $repo.targetPort "httpsPort" $repo.httpsPort) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/docker/hosted/{{ $repo.name }}" "/repositories/docker/hosted" "/repositories/docker/hosted/{{ $repo.name }}" "${WORKDIR}/repo-docker-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "docker hosted repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-docker-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "docker" "name" $repo.name "access" "read")) "name" (printf "Helm read access for docker repository %s" $repo.name) "description" (printf "Read-only access to docker repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-docker-%s-browse" $repo.name) (printf "nx-repository-view-docker-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "docker" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "docker" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-docker-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for docker hosted repository {{ $repo.name }}"
+  {{- end }}
+  {{- range $repo := .Values.bootstrap.repositories.dockerGroup }}
+
+    cat > "${WORKDIR}/repo-docker-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation)) "group" (dict "memberNames" $repo.memberNames) "docker" (dict "v1Enabled" (default false $repo.v1Enabled) "forceBasicAuth" (default false $repo.forceBasicAuth) "httpPort" $repo.targetPort "httpsPort" $repo.httpsPort) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/docker/group/{{ $repo.name }}" "/repositories/docker/group" "/repositories/docker/group/{{ $repo.name }}" "${WORKDIR}/repo-docker-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "docker group repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-docker-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "docker" "name" $repo.name "access" "read")) "name" (printf "Helm read access for docker repository %s" $repo.name) "description" (printf "Read-only access to docker repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-docker-%s-browse" $repo.name) (printf "nx-repository-view-docker-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "docker" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "docker" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-docker-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for docker group repository {{ $repo.name }}"
+  {{- end }}
+{{- range $repo := .Values.bootstrap.repositories.huggingfaceProxy }}
+
+    hf_bearer_token=""
+{{- if and $repo.bearerTokenFromSecret $repo.bearerTokenFromSecret.name $repo.bearerTokenFromSecret.key }}
+    if [ -f "/bootstrap-secrets/huggingface-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.bearerToken" ]; then
+      hf_bearer_token="$(cat /bootstrap-secrets/huggingface-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.bearerToken)"
+    fi
+{{- end }}
+    hf_bearer_token_escaped="$(json_escape "${hf_bearer_token}")"
+    hf_auth_fragment=""
+    if [ -n "${hf_bearer_token}" ]; then
+      hf_auth_fragment=",\"authentication\":{\"type\":\"bearerToken\",\"bearerToken\":\"${hf_bearer_token_escaped}\"}"
+    fi
+
+    cat > "${WORKDIR}/repo-huggingface-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<JSON
+    {"name":{{ $repo.name | quote }},"online":{{ default true $repo.online }} ,"storage":{"blobStoreName":{{ default "default" $repo.blobStoreName | quote }},"strictContentTypeValidation":{{ default true $repo.strictContentTypeValidation }}},"proxy":{"remoteUrl":{{ $repo.remoteUrl | quote }},"contentMaxAge":{{ default 1440 $repo.contentMaxAge }},"metadataMaxAge":{{ default 1440 $repo.metadataMaxAge }}},"negativeCache":{"enabled":{{ default true $repo.negativeCacheEnabled }},"timeToLive":{{ default 1440 $repo.negativeCacheTtl }}},"httpClient":{"blocked":{{ default false $repo.httpClientBlocked }},"autoBlock":{{ default true $repo.httpClientAutoBlock }}${hf_auth_fragment}}}
+    JSON
+
+    # Migrate legacy raw proxy with the same name to the new huggingface format.
+    if resource_exists "/repositories/raw/proxy/{{ $repo.name }}" && ! resource_exists "/repositories/huggingface/proxy/{{ $repo.name }}"; then
+      echo "Deleting legacy raw proxy repository {{ $repo.name }} before creating huggingface proxy"
+
+      delete_status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 \
+        -u "admin:${NEXUS_ADMIN_PASSWORD}" \
+        -X DELETE "${NEXUS_API}/repositories/raw/proxy/{{ $repo.name }}")
+
+      if [ "${delete_status}" = "204" ] || [ "${delete_status}" = "404" ]; then
+        echo "DELETE /repositories/raw/proxy/{{ $repo.name }} -> HTTP ${delete_status}"
+      elif [ "${delete_status}" = "405" ]; then
+        # Some Nexus versions only support delete by repository name.
+        delete_status2=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 \
+          -u "admin:${NEXUS_ADMIN_PASSWORD}" \
+          -X DELETE "${NEXUS_API}/repositories/{{ $repo.name }}")
+        if [ "${delete_status2}" = "204" ] || [ "${delete_status2}" = "404" ]; then
+          echo "DELETE /repositories/{{ $repo.name }} -> HTTP ${delete_status2}"
+        else
+          echo "ERROR: DELETE /repositories/{{ $repo.name }} returned HTTP ${delete_status2}" >&2
+          exit 1
+        fi
+      else
+        echo "ERROR: DELETE /repositories/raw/proxy/{{ $repo.name }} returned HTTP ${delete_status}" >&2
+        exit 1
+      fi
+    fi
+
+    upsert_json_resource "/repositories/huggingface/proxy/{{ $repo.name }}" "/repositories/huggingface/proxy" "/repositories/huggingface/proxy/{{ $repo.name }}" "${WORKDIR}/repo-huggingface-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "huggingface proxy repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-huggingface-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "huggingface" "name" $repo.name "access" "read")) "name" (printf "Helm read access for huggingface repository %s" $repo.name) "description" (printf "Read-only access to huggingface repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-huggingface-%s-browse" $repo.name) (printf "nx-repository-view-huggingface-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "huggingface" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "huggingface" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-huggingface-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for huggingface repository {{ $repo.name }}"
+{{- end }}
+  {{- range $repo := .Values.bootstrap.repositories.nugetProxy }}
+
+    cat > "${WORKDIR}/repo-nuget-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation)) "proxy" (dict "remoteUrl" $repo.remoteUrl "contentMaxAge" (default 1440 $repo.contentMaxAge) "metadataMaxAge" (default 1440 $repo.metadataMaxAge)) "negativeCache" (dict "enabled" (default true $repo.negativeCacheEnabled) "timeToLive" (default 1440 $repo.negativeCacheTtl)) "httpClient" (dict "blocked" (default false $repo.httpClientBlocked) "autoBlock" (default true $repo.httpClientAutoBlock)) "nugetProxy" (dict "queryCacheItemMaxAge" (default 3600 $repo.queryCacheItemMaxAge) "nugetVersion" (default "V3" $repo.nugetVersion)) "nuget" (dict "nugetVersion" (default "V3" $repo.nugetVersion)) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/nuget/proxy/{{ $repo.name }}" "/repositories/nuget/proxy" "/repositories/nuget/proxy/{{ $repo.name }}" "${WORKDIR}/repo-nuget-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "nuget proxy repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-nuget-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "nuget" "name" $repo.name "access" "read")) "name" (printf "Helm read access for nuget repository %s" $repo.name) "description" (printf "Read-only access to nuget repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-nuget-%s-browse" $repo.name) (printf "nx-repository-view-nuget-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "nuget" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "nuget" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-nuget-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for nuget repository {{ $repo.name }}"
+  {{- end }}
+  {{- range $repo := .Values.bootstrap.repositories.nugetHosted }}
+
+    cat > "${WORKDIR}/repo-nuget-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation) "writePolicy" (default "ALLOW" $repo.writePolicy)) "nuget" (dict "nugetVersion" (default "V3" $repo.nugetVersion)) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/nuget/hosted/{{ $repo.name }}" "/repositories/nuget/hosted" "/repositories/nuget/hosted/{{ $repo.name }}" "${WORKDIR}/repo-nuget-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "nuget hosted repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-nuget-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "nuget" "name" $repo.name "access" "read")) "name" (printf "Helm read access for nuget repository %s" $repo.name) "description" (printf "Read-only access to nuget repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-nuget-%s-browse" $repo.name) (printf "nx-repository-view-nuget-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "nuget" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "nuget" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-nuget-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for nuget hosted repository {{ $repo.name }}"
+  {{- end }}
+  {{- range $repo := .Values.bootstrap.repositories.nugetGroup }}
+
+    cat > "${WORKDIR}/repo-nuget-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation)) "group" (dict "memberNames" $repo.memberNames) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/nuget/group/{{ $repo.name }}" "/repositories/nuget/group" "/repositories/nuget/group/{{ $repo.name }}" "${WORKDIR}/repo-nuget-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "nuget group repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-nuget-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "nuget" "name" $repo.name "access" "read")) "name" (printf "Helm read access for nuget repository %s" $repo.name) "description" (printf "Read-only access to nuget repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-nuget-%s-browse" $repo.name) (printf "nx-repository-view-nuget-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "nuget" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "nuget" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-nuget-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for nuget group repository {{ $repo.name }}"
+  {{- end }}
+  {{- range $repo := .Values.bootstrap.repositories.mavenProxy }}
+
+    maven_proxy_password=""
+{{- if and $repo.passwordFromSecret $repo.passwordFromSecret.name $repo.passwordFromSecret.key }}
+    if [ -f "/bootstrap-secrets/maven-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.password" ]; then
+      maven_proxy_password="$(cat /bootstrap-secrets/maven-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.password)"
+    fi
+{{- end }}
+    maven_proxy_username={{ default "" $repo.username | quote }}
+    maven_proxy_username_escaped="$(json_escape "${maven_proxy_username}")"
+    maven_proxy_password_escaped="$(json_escape "${maven_proxy_password}")"
+    maven_auth_fragment=""
+    if [ -n "${maven_proxy_username}" ] && [ -n "${maven_proxy_password}" ]; then
+      maven_auth_fragment=",\"authentication\":{\"type\":\"username\",\"username\":\"${maven_proxy_username_escaped}\",\"password\":\"${maven_proxy_password_escaped}\"}"
+    elif [ -n "${maven_proxy_username}" ] || [ -n "${maven_proxy_password}" ]; then
+      echo "ERROR: maven proxy {{ $repo.name }} requires both username and passwordFromSecret" >&2
+      exit 1
+    fi
+
+    cat > "${WORKDIR}/repo-maven-proxy-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<JSON
+    {"name":{{ $repo.name | quote }},"online":{{ default true $repo.online }},"storage":{"blobStoreName":{{ default "default" $repo.blobStoreName | quote }},"strictContentTypeValidation":{{ default true $repo.strictContentTypeValidation }}},"proxy":{"remoteUrl":{{ $repo.remoteUrl | quote }},"contentMaxAge":{{ default 1440 $repo.contentMaxAge }},"metadataMaxAge":{{ default 1440 $repo.metadataMaxAge }}},"negativeCache":{"enabled":{{ default true $repo.negativeCacheEnabled }},"timeToLive":{{ default 1440 $repo.negativeCacheTtl }}},"httpClient":{"blocked":{{ default false $repo.httpClientBlocked }},"autoBlock":{{ default true $repo.httpClientAutoBlock }}${maven_auth_fragment}},"maven":{"versionPolicy":{{ default "RELEASE" $repo.versionPolicy | quote }},"layoutPolicy":{{ default "STRICT" $repo.layoutPolicy | quote }}}}
+    JSON
+    upsert_json_resource "/repositories/maven/proxy/{{ $repo.name }}" "/repositories/maven/proxy" "/repositories/maven/proxy/{{ $repo.name }}" "${WORKDIR}/repo-maven-proxy-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "maven proxy repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-maven-proxy-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "maven2" "name" $repo.name "access" "read")) "name" (printf "Helm read access for maven repository %s" $repo.name) "description" (printf "Read-only access to maven repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-maven2-%s-browse" $repo.name) (printf "nx-repository-view-maven2-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "maven2" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "maven2" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-maven-proxy-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for maven proxy repository {{ $repo.name }}"
+  {{- end }}
+  {{- range $repo := .Values.bootstrap.repositories.mavenHosted }}
+
+    cat > "${WORKDIR}/repo-maven-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation) "writePolicy" (default "ALLOW" $repo.writePolicy)) "maven" (dict "versionPolicy" (default "RELEASE" $repo.versionPolicy) "layoutPolicy" (default "STRICT" $repo.layoutPolicy)) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/maven/hosted/{{ $repo.name }}" "/repositories/maven/hosted" "/repositories/maven/hosted/{{ $repo.name }}" "${WORKDIR}/repo-maven-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "maven hosted repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-maven-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "maven2" "name" $repo.name "access" "read")) "name" (printf "Helm read access for maven repository %s" $repo.name) "description" (printf "Read-only access to maven repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-maven2-%s-browse" $repo.name) (printf "nx-repository-view-maven2-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "maven2" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "maven2" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-maven-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for maven hosted repository {{ $repo.name }}"
+  {{- end }}
+  {{- range $repo := .Values.bootstrap.repositories.mavenGroup }}
+
+    cat > "${WORKDIR}/repo-maven-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation)) "group" (dict "memberNames" $repo.memberNames) "maven" (dict "versionPolicy" (default "RELEASE" $repo.versionPolicy) "layoutPolicy" (default "STRICT" $repo.layoutPolicy)) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/maven/group/{{ $repo.name }}" "/repositories/maven/group" "/repositories/maven/group/{{ $repo.name }}" "${WORKDIR}/repo-maven-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "maven group repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-maven-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "maven2" "name" $repo.name "access" "read")) "name" (printf "Helm read access for maven repository %s" $repo.name) "description" (printf "Read-only access to maven repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-maven2-%s-browse" $repo.name) (printf "nx-repository-view-maven2-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "maven2" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "maven2" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-maven-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for maven group repository {{ $repo.name }}"
+  {{- end }}
+  {{- range $repo := .Values.bootstrap.repositories.rawHosted }}
+
+    cat > "${WORKDIR}/repo-raw-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation) "writePolicy" (default "ALLOW" $repo.writePolicy)) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/raw/hosted/{{ $repo.name }}" "/repositories/raw/hosted" "/repositories/raw/hosted/{{ $repo.name }}" "${WORKDIR}/repo-raw-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "raw hosted repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-raw-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "raw" "name" $repo.name "access" "read")) "name" (printf "Helm read access for raw repository %s" $repo.name) "description" (printf "Read-only access to raw repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-raw-%s-browse" $repo.name) (printf "nx-repository-view-raw-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "raw" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "raw" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-raw-hosted-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for raw hosted repository {{ $repo.name }}"
+  {{- end }}
+{{- range $repo := .Values.bootstrap.repositories.rawProxy }}
+
+    cat > "${WORKDIR}/repo-raw-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation)) "proxy" (dict "remoteUrl" $repo.remoteUrl "contentMaxAge" (default 1440 $repo.contentMaxAge) "metadataMaxAge" (default 1440 $repo.metadataMaxAge)) "negativeCache" (dict "enabled" (default true $repo.negativeCacheEnabled) "timeToLive" (default 1440 $repo.negativeCacheTtl)) "httpClient" (dict "blocked" (default false $repo.httpClientBlocked) "autoBlock" (default true $repo.httpClientAutoBlock)) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/raw/proxy/{{ $repo.name }}" "/repositories/raw/proxy" "/repositories/raw/proxy/{{ $repo.name }}" "${WORKDIR}/repo-raw-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "raw proxy repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-raw-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "raw" "name" $repo.name "access" "read")) "name" (printf "Helm read access for raw repository %s" $repo.name) "description" (printf "Read-only access to raw repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-raw-%s-browse" $repo.name) (printf "nx-repository-view-raw-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "raw" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "raw" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-raw-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for raw repository {{ $repo.name }}"
+{{- end }}
+  {{- range $repo := .Values.bootstrap.repositories.rawGroup }}
+
+    cat > "${WORKDIR}/repo-raw-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation)) "group" (dict "memberNames" $repo.memberNames) | toJson }}
+    JSON
+    upsert_json_resource "/repositories/raw/group/{{ $repo.name }}" "/repositories/raw/group" "/repositories/raw/group/{{ $repo.name }}" "${WORKDIR}/repo-raw-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "raw group repository {{ $repo.name }}"
+    cat > "${WORKDIR}/role-raw-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "raw" "name" $repo.name "access" "read")) "name" (printf "Helm read access for raw repository %s" $repo.name) "description" (printf "Read-only access to raw repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-raw-%s-browse" $repo.name) (printf "nx-repository-view-raw-%s-read" $repo.name)) "roles" (list) | toJson }}
+    JSON
+    upsert_json_resource "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "raw" "name" $repo.name "access" "read") }}" "/security/roles" "/security/roles/{{ include "nexus.bootstrapRoleId" (dict "format" "raw" "name" $repo.name "access" "read") }}" "${WORKDIR}/role-raw-group-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "role for raw group repository {{ $repo.name }}"
+  {{- end }}
+{{- $anonRoles := list }}
+{{- range $repo := .Values.bootstrap.repositories.pypiProxy }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "pypi" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.pypiHosted }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "pypi" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.pypiGroup }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "pypi" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.npmProxy }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "npm" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.npmHosted }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "npm" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.npmGroup }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "npm" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.dockerProxy }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "docker" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.dockerHosted }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "docker" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.dockerGroup }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "docker" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.nugetProxy }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "nuget" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.nugetHosted }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "nuget" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.nugetGroup }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "nuget" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.mavenProxy }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "maven2" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.mavenHosted }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "maven2" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.mavenGroup }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "maven2" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.huggingfaceProxy }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "huggingface" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.rawProxy }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "raw" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.rawHosted }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "raw" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.rawGroup }}{{- if $repo.allowAnonymousAccess }}{{- $anonRoles = append $anonRoles (include "nexus.bootstrapRoleId" (dict "format" "raw" "name" $repo.name "access" "read")) }}{{- end }}{{- end }}
+{{- $anonRoles = uniq $anonRoles }}
+{{- $anonymousEnabled := gt (len $anonRoles) 0 }}
+{{- if $anonymousEnabled }}
+
+    # Grant anonymous access only to explicitly allowed repositories.
+    cat > "${WORKDIR}/anon-user.json" <<'JSON'
+    {{ dict "userId" "anonymous" "firstName" "Anonymous" "lastName" "User" "emailAddress" "anonymous@example.org" "source" "default" "status" "active" "roles" $anonRoles | toJson }}
+    JSON
+    curl_json PUT "/security/users/anonymous" "200 204" "${WORKDIR}/anon-user.json"
+{{- end }}
+
+{{- if $anonymousEnabled }}
+    # Anonymous for selected repositories requires both per-repository grants and global anonymous enabled.
+    cat > "${WORKDIR}/anon-access.json" <<'JSON'
+    {"enabled": true, "userId": "anonymous", "realmName": "NexusAuthorizingRealm"}
+    JSON
+    curl_json PUT "/security/anonymous" "200" "${WORKDIR}/anon-access.json"
+{{- else }}
+    cat > "${WORKDIR}/anon-access.json" <<'JSON'
+    {"enabled": false, "userId": "anonymous", "realmName": "NexusAuthorizingRealm"}
+    JSON
+    curl_json PUT "/security/anonymous" "200" "${WORKDIR}/anon-access.json"
+{{- end }}
+{{- range $user := .Values.bootstrap.users }}
+{{- $roles := list }}
+{{- if $user.isAdmin }}
+{{- $roles = append $roles "nx-admin" }}
+{{- end }}
+{{- range $role := default (list) $user.roles }}
+{{- $roles = append $roles $role }}
+{{- end }}
+{{- with $user.repositoryAccess }}
+{{- with .pypi }}
+{{- range $name, $enabled := . }}
+{{- if $enabled }}
+{{- $roles = append $roles (include "nexus.bootstrapRoleId" (dict "format" "pypi" "name" $name "access" "read")) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- with .npm }}
+{{- range $name, $enabled := . }}
+{{- if $enabled }}
+{{- $roles = append $roles (include "nexus.bootstrapRoleId" (dict "format" "npm" "name" $name "access" "read")) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- with .docker }}
+{{- range $name, $enabled := . }}
+{{- if $enabled }}
+{{- $roles = append $roles (include "nexus.bootstrapRoleId" (dict "format" "docker" "name" $name "access" "read")) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- with .huggingface }}
+{{- range $name, $enabled := . }}
+{{- if $enabled }}
+{{- $roles = append $roles (include "nexus.bootstrapRoleId" (dict "format" "huggingface" "name" $name "access" "read")) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- with .nuget }}
+{{- range $name, $enabled := . }}
+{{- if $enabled }}
+{{- $roles = append $roles (include "nexus.bootstrapRoleId" (dict "format" "nuget" "name" $name "access" "read")) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- with .maven }}
+{{- range $name, $enabled := . }}
+{{- if $enabled }}
+{{- $roles = append $roles (include "nexus.bootstrapRoleId" (dict "format" "maven2" "name" $name "access" "read")) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- with .raw }}
+{{- range $name, $enabled := . }}
+{{- if $enabled }}
+{{- $roles = append $roles (include "nexus.bootstrapRoleId" (dict "format" "raw" "name" $name "access" "read")) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $roles = uniq $roles }}
+
+    user_password=""
+{{- if $user.password }}
+    user_password="$(cat <<'PASSWORD'
+    {{ $user.password }}
+    PASSWORD
+    )"
+{{- else if and $user.passwordFromSecret $user.passwordFromSecret.name $user.passwordFromSecret.key }}
+    if [ -f "/bootstrap-secrets/{{ $user.userId }}.password" ]; then
+      user_password="$(cat /bootstrap-secrets/{{ $user.userId }}.password)"
+    fi
+{{- end }}
+    user_password_escaped="$(json_escape "${user_password}")"
+    cat > "${WORKDIR}/user-{{ regexReplaceAll "[^a-z0-9]+" (lower $user.userId) "-" | trimAll "-" }}-create.json" <<JSON
+    {"userId":{{ $user.userId | quote }},"firstName":{{ $user.firstName | quote }},"lastName":{{ $user.lastName | quote }},"emailAddress":{{ $user.emailAddress | quote }},"password":"${user_password_escaped}","status":{{ default "active" $user.status | quote }},"roles":{{ toJson $roles }}}
+    JSON
+    cat > "${WORKDIR}/user-{{ regexReplaceAll "[^a-z0-9]+" (lower $user.userId) "-" | trimAll "-" }}-update.json" <<'JSON'
+    {{ dict "userId" $user.userId "firstName" $user.firstName "lastName" $user.lastName "emailAddress" $user.emailAddress "status" (default "active" $user.status) "source" "default" "roles" $roles | toJson }}
+    JSON
+
+    # Try update first; if user doesn't exist (404), create it
+    echo "Upserting user {{ $user.userId }}"
+    update_response=$(curl -sS -w '\n%{http_code}' --max-time 60 \
+      -u "admin:${NEXUS_ADMIN_PASSWORD}" \
+      -H "Content-Type: application/json" \
+      -X PUT "${NEXUS_API}/security/users/{{ $user.userId }}" \
+      --data-binary "@${WORKDIR}/user-{{ regexReplaceAll "[^a-z0-9]+" (lower $user.userId) "-" | trimAll "-" }}-update.json")
+    update_status=$(printf '%s\n' "${update_response}" | tail -n 1)
+
+    if [ "${update_status}" = "404" ]; then
+      # User doesn't exist, create it
+      if [ -z "${user_password}" ]; then
+        echo "ERROR: cannot create user {{ $user.userId }} without password or passwordFromSecret" >&2
+        exit 1
+      fi
+      curl_json POST "/security/users" "200 201 204" "${WORKDIR}/user-{{ regexReplaceAll "[^a-z0-9]+" (lower $user.userId) "-" | trimAll "-" }}-create.json"
+    elif [ "${update_status}" = "200" ] || [ "${update_status}" = "204" ]; then
+      echo "PUT /security/users/{{ $user.userId }} -> HTTP ${update_status}"
+    else
+      echo "ERROR: PUT /security/users/{{ $user.userId }} returned HTTP ${update_status}" >&2
+      printf '%s\n' "${update_response}" | sed '$d' >&2
+      exit 1
+    fi
+{{- end }}
+
+    echo "Nexus bootstrap completed successfully."
+
+{{- if .Values.bootstrap.repositoryCleanup.enabled }}
+  cleanup-orphan-repositories.sh: |
+    #!/bin/sh
+    set -eu
+
+    NEXUS_API="${NEXUS_URL}/service/rest/v1"
+    WORKDIR="/work"
+    CLEANUP_MARKER_ROLE="helm-repository-cleanup-v2-completed"
+    mkdir -p "${WORKDIR}"
+
+    resource_exists() {
+      path="$1"
+      curl -sf -o /dev/null --max-time 30 \
+        -u "admin:${NEXUS_ADMIN_PASSWORD}" \
+        "${NEXUS_API}${path}"
+    }
+
+    wait_for_nexus() {
+      elapsed=0
+      until curl -sf -o /dev/null "${NEXUS_API}/status/writable"; do
+        elapsed=$((elapsed + 15))
+        if [ "${elapsed}" -ge 900 ]; then
+          echo "ERROR: Nexus did not become writable within 900 seconds" >&2
+          exit 1
+        fi
+        echo "Waiting for Nexus writable status... ${elapsed}s"
+        sleep 15
+      done
+    }
+
+    delete_repo_by_name() {
+      repo_name="$1"
+      repo_format="$2"
+      repo_type="$3"
+
+      delete_status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 \
+        -u "admin:${NEXUS_ADMIN_PASSWORD}" \
+        -X DELETE "${NEXUS_API}/repositories/${repo_name}")
+
+      if [ "${delete_status}" = "204" ] || [ "${delete_status}" = "404" ]; then
+        echo "DELETE /repositories/${repo_name} -> HTTP ${delete_status}"
+        return 0
+      fi
+
+      if [ "${delete_status}" = "405" ] && [ -n "${repo_format}" ] && [ -n "${repo_type}" ]; then
+        delete_status2=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 \
+          -u "admin:${NEXUS_ADMIN_PASSWORD}" \
+          -X DELETE "${NEXUS_API}/repositories/${repo_format}/${repo_type}/${repo_name}")
+        if [ "${delete_status2}" = "204" ] || [ "${delete_status2}" = "404" ]; then
+          echo "DELETE /repositories/${repo_format}/${repo_type}/${repo_name} -> HTTP ${delete_status2}"
+          return 0
+        fi
+        echo "ERROR: DELETE /repositories/${repo_format}/${repo_type}/${repo_name} returned HTTP ${delete_status2}" >&2
+        return 1
+      fi
+
+      echo "ERROR: DELETE /repositories/${repo_name} returned HTTP ${delete_status}" >&2
+      return 1
+    }
+
+    wait_for_nexus
+
+    if resource_exists "/security/roles/${CLEANUP_MARKER_ROLE}"; then
+      echo "Repository cleanup already completed earlier, skipping."
+      exit 0
+    fi
+
+    cat > "${WORKDIR}/managed-repositories.txt" <<'EOF'
+{{- range $repo := .Values.bootstrap.repositories.pypiProxy }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.pypiHosted }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.pypiGroup }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.npmProxy }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.npmHosted }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.npmGroup }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.dockerProxy }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.dockerHosted }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.dockerGroup }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.nugetProxy }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.nugetHosted }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.nugetGroup }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.mavenProxy }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.mavenHosted }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.mavenGroup }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.huggingfaceProxy }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.rawProxy }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.rawHosted }}
+    {{ $repo.name }}
+{{- end }}
+{{- range $repo := .Values.bootstrap.repositories.rawGroup }}
+    {{ $repo.name }}
+{{- end }}
+    EOF
+
+    sed -i 's/^[[:space:]]*//; s/[[:space:]]*$//' "${WORKDIR}/managed-repositories.txt"
+    sed -i '/^[[:space:]]*$/d' "${WORKDIR}/managed-repositories.txt"
+
+    if [ ! -s "${WORKDIR}/managed-repositories.txt" ]; then
+      echo "Repository cleanup skipped: no repositories configured in values."
+      exit 0
+    fi
+
+    sort -u "${WORKDIR}/managed-repositories.txt" -o "${WORKDIR}/managed-repositories.txt"
+
+    repositories_json=$(curl -sS --max-time 60 \
+      -u "admin:${NEXUS_ADMIN_PASSWORD}" \
+      "${NEXUS_API}/repositories")
+
+    repo_lines=$(printf '%s' "${repositories_json}" | tr '\n' ' ' | sed 's/^\[//; s/\]$//' | sed 's/},[[:space:]]*{/}|{/g' | tr '|' '\n')
+
+    if [ -z "${repo_lines}" ]; then
+      echo "No repositories returned by Nexus API."
+      exit 0
+    fi
+
+    printf '%s\n' "${repo_lines}" | while IFS= read -r repo_line; do
+      repo_name=$(printf '%s' "${repo_line}" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+      repo_format=$(printf '%s' "${repo_line}" | sed -n 's/.*"format"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+      repo_type=$(printf '%s' "${repo_line}" | sed -n 's/.*"type"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+
+      if [ -z "${repo_name}" ]; then
+        continue
+      fi
+
+      if grep -Fqx "${repo_name}" "${WORKDIR}/managed-repositories.txt"; then
+        echo "Keeping managed repository ${repo_name}"
+        continue
+      fi
+
+      # Group repositories don't store objects directly; check/delete them without asset query.
+      if [ "${repo_type}" = "group" ]; then
+        echo "Deleting unmanaged group repository ${repo_name}"
+        delete_repo_by_name "${repo_name}" "${repo_format}" "${repo_type}"
+        continue
+      fi
+
+      assets_json=$(curl -sS --max-time 60 \
+        -u "admin:${NEXUS_ADMIN_PASSWORD}" \
+        "${NEXUS_API}/search/assets?repository=${repo_name}&limit=1")
+
+      if printf '%s' "${assets_json}" | grep -Eq '"items":[[:space:]]*\[[[:space:]]*\{'; then
+        echo "Skipping non-empty repository ${repo_name}"
+        continue
+      fi
+
+      echo "Deleting unmanaged empty repository ${repo_name}"
+      delete_repo_by_name "${repo_name}" "${repo_format}" "${repo_type}"
+    done
+
+    cat > "${WORKDIR}/cleanup-marker-role.json" <<'JSON'
+    {"id":"helm-repository-cleanup-v2-completed","name":"Helm repository cleanup v2 completed marker","description":"Internal marker role created by Helm one-time repository cleanup","privileges":[],"roles":[]}
+    JSON
+
+    marker_status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 \
+      -u "admin:${NEXUS_ADMIN_PASSWORD}" \
+      -H "Content-Type: application/json" \
+      -X POST "${NEXUS_API}/security/roles" \
+      --data-binary "@${WORKDIR}/cleanup-marker-role.json")
+
+    if [ "${marker_status}" = "200" ] || [ "${marker_status}" = "201" ] || [ "${marker_status}" = "204" ] || [ "${marker_status}" = "400" ]; then
+      echo "Repository cleanup marker processed with HTTP ${marker_status}"
+    else
+      echo "ERROR: could not persist repository cleanup marker, HTTP ${marker_status}" >&2
+      exit 1
+    fi
+
+    echo "Repository cleanup completed successfully."
+{{- end }}
+{{- end }}

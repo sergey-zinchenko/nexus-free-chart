@@ -1,0 +1,48 @@
+# Patterns to ignore when packaging the chart.
+# Keep this file limited to editor/VCS junk and local secret overrides.
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Chart metadata for local tooling only
+.helmignore
+
+# Common VCS dirs/files
+.git/
+.gitignore
+.gitattributes
+.bzr/
+.bzrignore
+.hg/
+.hgignore
+.svn/
+
+# IDE/editor files
+.idea/
+.project
+*.tmproj
+.vscode/
+
+# Backup and temporary files
+*.swp
+*.swo
+*.bak
+*.tmp
+*~
+*.log
+
+# Local overrides and secrets
+/values.*.yaml
+secrets*.yaml
+*.dec.yaml
+*.sops.yaml
+.env
+.env.*
+.kube/
+*.pem
+*.key
+*.crt
+*.p12
+*.kubeconfig
+.secrets/

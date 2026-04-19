@@ -1,0 +1,36 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "nexus.fullname" . }}
+  {{- if .Values.monitoring.prometheusRule.namespace }}
+  namespace: {{ .Values.monitoring.prometheusRule.namespace }}
+  {{- end }}
+  labels:
+    {{- include "nexus.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: {{ include "nexus.fullname" . }}.rules
+      rules:
+        - alert: NexusDown
+          expr: |
+            sum(up{namespace="{{ .Release.Namespace }}",service="{{ include "nexus.fullname" . }}"} == 0) > 0
+          for: {{ .Values.monitoring.prometheusRule.for }}
+          labels:
+            severity: {{ .Values.monitoring.prometheusRule.severity }}
+          annotations:
+            summary: Nexus service is down
+            description: Nexus target is not reachable in namespace {{ .Release.Namespace }}.
+        - alert: NexusPodRestartsHigh
+          expr: |
+            sum(increase(kube_pod_container_status_restarts_total{namespace="{{ .Release.Namespace }}",pod=~"{{ include "nexus.fullname" . }}-.*",container="nxrm-app"}[10m])) > {{ .Values.monitoring.prometheusRule.restartThreshold }}
+          for: {{ .Values.monitoring.prometheusRule.for }}
+          labels:
+            severity: {{ .Values.monitoring.prometheusRule.severity }}
+          annotations:
+            summary: Nexus pod restarts are high
+            description: Nexus app container restarted more than {{ .Values.monitoring.prometheusRule.restartThreshold }} times in 10 minutes.
+{{- end }}

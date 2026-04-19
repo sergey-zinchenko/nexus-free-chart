@@ -1,0 +1,42 @@
+# OS/editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.project
+*.tmproj
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+
+# Helm and packaging artifacts
+*.tgz
+*.tar.gz
+/dist/
+/rendered.yaml
+charts/*/charts/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+/.tmp/
+
+# Local and secret overrides
+/values.*.yaml
+secrets*.yaml
+*.dec.yaml
+*.sops.yaml
+.env
+.env.*
+.kube/
+*.pem
+*.key
+*.crt
+*.p12
+*.kubeconfig
+.secrets/
+

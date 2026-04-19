@@ -1,0 +1,306 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ template "nexus.fullname" . }}
+  labels:
+{{ include "nexus.labels" . | nindent 4 }}
+  {{- if .Values.nexus.extraLabels }}
+    {{- with .Values.nexus.extraLabels }}
+      {{ toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+{{- if .Values.statefulset.annotations }}
+  annotations:
+    {{ toYaml .Values.statefulset.annotations | nindent 4 }}
+{{- end }}
+spec:
+  replicas: 1
+  updateStrategy:
+    type: {{ .Values.statefulset.updateStrategy.type }}
+    {{- with .Values.statefulset.updateStrategy.rollingUpdate }}
+    rollingUpdate:
+      {{ toYaml . | nindent 6 }}
+    {{- end }}
+  serviceName: {{ include "nexus.service.headless" . }}
+  selector:
+    matchLabels:
+      {{- include "nexus.selectorLabels" . | nindent 6 }}
+      {{- if .Values.nexus.extraSelectorLabels }}
+        {{- with .Values.nexus.extraSelectorLabels }}
+          {{ toYaml . | nindent 6 }}
+        {{- end }}
+      {{- end }}
+  template:
+    metadata:
+      annotations:
+        {{- if .Values.nexus.properties.override }}
+        checksum/configmap-properties: {{ include (print .Template.BasePath "/configmap-properties.yaml") $ | sha256sum }}
+        {{- end }}
+        {{- if .Values.statefulset.podAnnotations }}
+          {{ toYaml .Values.statefulset.podAnnotations | nindent 8}}
+        {{- end }}
+      labels:
+        {{- include "nexus.selectorLabels" . | nindent 8 }}
+        {{- if .Values.nexus.extraSelectorLabels }}
+          {{- with .Values.nexus.extraSelectorLabels }}
+            {{ toYaml . | nindent 8 }}
+          {{- end }}
+        {{- end }}
+    spec:
+      {{- if .Values.serviceAccount.enabled }}
+      serviceAccountName: {{ include "nexus.serviceAccountName" . }}
+      {{- end }}
+      {{- with .Values.statefulset.podSecurityContext }}
+      securityContext:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.statefulset.container.terminationGracePeriod }}
+      {{- if .Values.statefulset.initContainers }}
+      initContainers:
+        {{ toYaml .Values.statefulset.initContainers | nindent 8 }}
+      {{- end }}
+      {{- if .Values.statefulset.nodeSelector }}
+      nodeSelector:
+        {{ toYaml .Values.statefulset.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if .Values.statefulset.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{ toYaml .Values.statefulset.topologySpreadConstraints | nindent 8 }}
+      {{- end }}
+      {{- if .Values.statefulset.hostAliases }}
+      hostAliases:
+        {{ toYaml .Values.statefulset.hostAliases | nindent 8 }}
+      {{- end }}
+      {{- if and .Values.statefulset.imagePullSecrets.secret (not .Values.statefulset.imagePullSecrets.existingSecret.enabled) }}
+      imagePullSecrets:
+        - name: {{ include "nexus.fullname" . }}-imagepullsecret
+      {{- else if and (not .Values.statefulset.imagePullSecrets.secret) .Values.statefulset.imagePullSecrets.existingSecret.enabled .Values.statefulset.imagePullSecrets.existingSecret.name }}
+      imagePullSecrets:
+        - name: {{ .Values.statefulset.imagePullSecrets.existingSecret.name }}
+      {{- end }}
+      containers:
+        - name: nxrm-app
+          image: {{ .Values.statefulset.container.image.repository }}:{{ .Values.statefulset.container.image.nexusTag }}
+          imagePullPolicy: {{ .Values.statefulset.container.pullPolicy }}
+          securityContext:
+            {{- toYaml (default (dict) .Values.statefulset.container.securityContext) | nindent 12 }}
+          lifecycle:
+          {{- if .Values.statefulset.postStart.command }}
+            postStart:
+              exec:
+                command: {{ .Values.statefulset.postStart.command }}
+          {{- end }}
+          ports:
+            - name: nexus-ui
+              containerPort: {{ .Values.statefulset.container.containerPort }}
+            {{- if .Values.bootstrap.repositories.dockerProxy }}
+            {{- range .Values.bootstrap.repositories.dockerProxy }}
+            - name: docker-{{ .port }}
+              containerPort: {{ .port }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.bootstrap.repositories.dockerHosted }}
+            {{- range .Values.bootstrap.repositories.dockerHosted }}
+            - name: docker-{{ .port }}
+              containerPort: {{ .port }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.bootstrap.repositories.dockerGroup }}
+            {{- range .Values.bootstrap.repositories.dockerGroup }}
+            - name: docker-{{ .port }}
+              containerPort: {{ .port }}
+            {{- end }}
+            {{- end }}
+          resources:
+            {{ toYaml .Values.statefulset.container.resources | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.statefulset.startupProbe.path }}
+              port: {{ .Values.statefulset.container.containerPort }}
+            initialDelaySeconds: {{ .Values.statefulset.startupProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.statefulset.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.statefulset.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.statefulset.startupProbe.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.statefulset.livenessProbe.path }}
+              port: {{ .Values.statefulset.container.containerPort }}
+            initialDelaySeconds: {{ .Values.statefulset.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.statefulset.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.statefulset.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.statefulset.livenessProbe.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.statefulset.readinessProbe.path }}
+              port: {{ .Values.statefulset.container.containerPort }}
+            initialDelaySeconds: {{ .Values.statefulset.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.statefulset.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.statefulset.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.statefulset.readinessProbe.failureThreshold }}
+          env:
+            - name: NEXUS_DATA
+              value: /nexus-data
+            - name: DB_NAME
+              value: "{{ default (dig "auth" "database" "" .Values.postgresql) .Values.postgresql.database }}"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus.dbSecretName" . }}
+                  key: {{ include "nexus.dbSecretPasswordKey" . }}
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus.dbSecretName" . }}
+                  key: {{ include "nexus.dbSecretUsernameKey" . }}
+            - name: DB_HOST
+              value: "{{ default (printf "%s-postgresql" .Release.Name) .Values.statefulset.container.env.dbHost }}"
+            - name: NEXUS_DATASTORE_JDBC_URL
+              value: "jdbc:postgresql://${DB_HOST}:{{ .Values.statefulset.container.env.nexusDBPort }}/${DB_NAME}{{ .Values.statefulset.container.env.jdbcUrlParams }}"
+            - name: NEXUS_DATASTORE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus.dbSecretName" . }}
+                  key: {{ include "nexus.dbSecretUsernameKey" . }}
+            - name: NEXUS_DATASTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus.dbSecretName" . }}
+                  key: {{ include "nexus.dbSecretPasswordKey" . }}
+            - name: NEXUS_SECURITY_INITIAL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus.adminSecretName" . }}
+                  key: {{ include "nexus.adminSecretPasswordKey" . }}
+            - name: NEXUS_SECURITY_RANDOMPASSWORD
+              value: "false"
+            {{- if .Values.secret.nexusSecret.enabled }}
+            - name: NEXUS_SECRETS_KEY_FILE
+              value: "{{ trimSuffix "/" .Values.secret.nexusSecret.mountPath }}/{{ include "nexus.encryptionSecretKey" . }}"
+            {{- end }}
+            - name: INSTALL4J_ADD_VM_PARAMS
+              value: "{{ .Values.statefulset.container.env.install4jAddVmParams }} -Dnexus.datastore.enabled=true -Djava.util.prefs.userRoot=${NEXUS_DATA}/javaprefs \
+          -Dnexus.datastore.nexus.jdbcUrl=jdbc:postgresql://${DB_HOST}:{{ .Values.statefulset.container.env.nexusDBPort }}/${DB_NAME}{{ .Values.statefulset.container.env.jdbcUrlParams }} \
+          -Dnexus.datastore.nexus.username=${DB_USER} \
+          -Dnexus.datastore.nexus.password=${DB_PASSWORD}"
+          {{- if .Values.statefulset.container.additionalEnv }}
+            {{ toYaml .Values.statefulset.container.additionalEnv | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+          {{- if .Values.secret.nexusSecret.enabled }}
+            - name: nexus-secret-volume
+              mountPath: {{ .Values.secret.nexusSecret.mountPath }}
+              readOnly: true
+          {{- end }}
+            - name: nexus-data
+              mountPath: /nexus-data
+          {{- if .Values.logStorage.combineTaskLogs }}
+            - name: logback-tasklogfile-override
+              mountPath: /nexus-data/etc/logback/logback-tasklogfile-appender-override.xml
+              subPath: logback-tasklogfile-appender-override.xml
+          {{- end }}
+            {{- if .Values.config.enabled }}
+            - name: {{ include "nexus.fullname" . }}-conf
+              mountPath: {{ .Values.config.mountPath }}
+            {{- end }}
+            {{- if .Values.nexus.properties.override }}
+            - mountPath: /nexus-data/etc/nexus.properties
+              name: {{ include "nexus.fullname" . }}-properties
+              subPath: nexus.properties
+            {{- end }}
+            {{- if .Values.statefulset.additionalVolumeMounts}}
+              {{ toYaml .Values.statefulset.additionalVolumeMounts | nindent 12 }}
+            {{- end }}
+        {{- if .Values.logStorage.tailSecondaryLogs }}
+        - name: request-log
+          image: {{ .Values.statefulset.requestLogContainer.image.repository }}:{{ .Values.statefulset.requestLogContainer.image.tag }}
+          args: [/bin/sh, -c, 'mkdir -p /nexus-data/log && touch /nexus-data/log/request.log && tail -n+1 -F /nexus-data/log/request.log']
+          securityContext:
+            {{- toYaml (default (dict) .Values.statefulset.requestLogContainer.securityContext) | nindent 12 }}
+          volumeMounts:
+            - name: nexus-data
+              mountPath: /nexus-data
+          resources:
+            {{ toYaml .Values.statefulset.requestLogContainer.resources | nindent 12 }}
+        - name: audit-log
+          image: {{ .Values.statefulset.auditLogContainer.image.repository }}:{{ .Values.statefulset.auditLogContainer.image.tag }}
+          args: [/bin/sh, -c, 'mkdir -p /nexus-data/log/audit && touch /nexus-data/log/audit/audit.log && tail -n+1 -F /nexus-data/log/audit/audit.log']
+          securityContext:
+            {{- toYaml (default (dict) .Values.statefulset.auditLogContainer.securityContext) | nindent 12 }}
+          volumeMounts:
+            - name: nexus-data
+              mountPath: /nexus-data
+          resources:
+            {{ toYaml .Values.statefulset.auditLogContainer.resources | nindent 12 }}
+        {{- if .Values.logStorage.combineTaskLogs }}
+        - name: tasks-log
+          image: {{ .Values.statefulset.taskLogContainer.image.repository }}:{{ .Values.statefulset.taskLogContainer.image.tag }}
+          args: [/bin/sh, -c, 'mkdir -p /nexus-data/log/tasks && touch /nexus-data/log/tasks/allTasks.log && tail -n+1 -F /nexus-data/log/tasks/allTasks.log']
+          securityContext:
+            {{- toYaml (default (dict) .Values.statefulset.taskLogContainer.securityContext) | nindent 12 }}
+          volumeMounts:
+            - name: nexus-data
+              mountPath: /nexus-data
+          resources:
+            {{ toYaml .Values.statefulset.taskLogContainer.resources | nindent 12 }}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.statefulset.additionalContainers }}
+          {{ toYaml .Values.statefulset.additionalContainers | nindent 8 }}
+        {{- end }}
+      volumes:
+      {{- if .Values.config.enabled }}
+        - name: {{ include "nexus.fullname" . }}-conf
+          configMap:
+            name: {{ include "nexus.fullname" . }}-conf
+      {{- end }}
+      {{- if .Values.nexus.properties.override }}
+        - name: {{ include "nexus.fullname" . }}-properties
+          configMap:
+            name: {{ include "nexus.fullname" . }}-properties
+            items:
+            - key: nexus.properties
+              path: nexus.properties
+      {{- end }}
+      {{- if .Values.statefulset.additionalVolumes }}
+        {{ toYaml .Values.statefulset.additionalVolumes | nindent 8 }}
+      {{- end }}
+      {{- if .Values.secret.nexusSecret.enabled }}
+        - name: nexus-secret-volume
+          secret:
+            secretName: {{ include "nexus.encryptionSecretName" . }}
+        {{- end }}
+      {{- if .Values.logStorage.combineTaskLogs }}
+        - name: logback-tasklogfile-override
+          configMap:
+            name: {{ template "nexus.fullname" . }}-logback-tasklogfile-override
+            items:
+              - key: logback-tasklogfile-appender-override.xml
+                path: logback-tasklogfile-appender-override.xml
+      {{- end }}
+  {{- if  and (not .Values.pvc.volumeClaimTemplate.enabled) (not .Values.pvc.existingClaim) }}
+        - name: nexus-data
+          emptyDir:
+            sizeLimit: {{ .Values.pvc.storage }}
+  {{- end }}
+  {{- if and (not .Values.pvc.volumeClaimTemplate.enabled) ( .Values.pvc.existingClaim ) }}
+        - name: nexus-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.pvc.existingClaim }}
+  {{- end }}
+    {{- with .Values.tolerations }}
+      tolerations:
+        {{ toYaml . | nindent 8 }}
+    {{- end }}
+  {{- if .Values.pvc.volumeClaimTemplate.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: nexus-data
+      spec:
+        accessModes: [ "{{ .Values.pvc.accessModes }}" ]
+        {{- if .Values.pvc.storageClass }}
+        storageClassName: {{ .Values.pvc.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{.Values.pvc.storage }}
+  {{- end }}
