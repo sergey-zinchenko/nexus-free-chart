@@ -1,0 +1,29 @@
+# Public ingress + TLS example
+
+ingress:
+  enabled: true
+  ingressClassName: nginx
+  host: nexus.example.com
+  hostPath: /
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-production
+  tls:
+    - secretName: nexus-tls
+      hosts:
+        - nexus.example.com
+
+bootstrap:
+  enabled: true
+  anonymousAccess:
+    enabled: false
+  repositories:
+    dockerGroup:
+      - name: docker-public
+        memberNames:
+          - docker-hub
+          - docker-hosted
+        allowAnonymousAccess: true
+        host: docker-group.example.com
+        port: 5002
+        targetPort: 5002
+        secretName: nexus-docker-group-tls

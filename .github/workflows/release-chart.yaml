@@ -1,0 +1,52 @@
+name: release-chart
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'chart-v*'
+
+jobs:
+  package-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.4
+
+      - name: Helm dependency update
+        run: helm dependency update ./charts/nexus
+
+      - name: Lint chart
+        run: helm lint ./charts/nexus
+
+      - name: Package chart
+        run: |
+          mkdir -p dist
+          helm package ./charts/nexus --destination ./dist
+
+      - name: Login to GHCR
+        env:
+          CR_PAT: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "${CR_PAT}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Push chart to OCI (GHCR)
+        run: |
+          CHART_FILE=$(ls ./dist/*.tgz | head -n 1)
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          helm push "${CHART_FILE}" "oci://ghcr.io/${OWNER_LC}/charts"
+
+      - name: Publish chart artifact in GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: ./dist/*.tgz
+          generate_release_notes: true

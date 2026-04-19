@@ -1,0 +1,121 @@
+{{- if .Values.bootstrap.enabled }}
+{{- $hasBootstrapSecrets := false -}}
+{{- range .Values.bootstrap.users }}
+{{- if and .passwordFromSecret .passwordFromSecret.name .passwordFromSecret.key }}
+{{- $hasBootstrapSecrets = true -}}
+{{- end }}
+{{- end }}
+{{- range .Values.bootstrap.repositories.huggingfaceProxy }}
+{{- if and .bearerTokenFromSecret .bearerTokenFromSecret.name .bearerTokenFromSecret.key }}
+{{- $hasBootstrapSecrets = true -}}
+{{- end }}
+{{- end }}
+{{- range .Values.bootstrap.repositories.mavenProxy }}
+{{- if and .passwordFromSecret .passwordFromSecret.name .passwordFromSecret.key }}
+{{- $hasBootstrapSecrets = true -}}
+{{- end }}
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "nexus.fullname" . }}-bootstrap
+  labels:
+    {{- include "nexus.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "20"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.bootstrap.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.bootstrap.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "nexus.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: bootstrap-job
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "nexus.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: bootstrap
+          image: {{ printf "%s:%s" .Values.bootstrap.image.repository .Values.bootstrap.image.tag }}
+          imagePullPolicy: {{ .Values.bootstrap.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: NEXUS_URL
+              value: "http://{{ include "nexus.fullname" . }}-hl:8081"
+            - name: NEXUS_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus.adminSecretName" . }}
+                  key: {{ include "nexus.adminSecretPasswordKey" . }}
+          command:
+            - /bin/sh
+            - /bootstrap/bootstrap.sh
+          volumeMounts:
+            - name: bootstrap-script
+              mountPath: /bootstrap
+              readOnly: true
+            - name: bootstrap-work
+              mountPath: /work
+{{- if $hasBootstrapSecrets }}
+            - name: bootstrap-secrets
+              mountPath: /bootstrap-secrets
+              readOnly: true
+{{- end }}
+          resources:
+            requests:
+              cpu: "0.05"
+              memory: "64Mi"
+            limits:
+              cpu: "0.2"
+              memory: "256Mi"
+      volumes:
+        - name: bootstrap-script
+          configMap:
+            name: {{ include "nexus.bootstrapConfigMapName" . }}
+            defaultMode: 0555
+        - name: bootstrap-work
+          emptyDir: {}
+{{ if $hasBootstrapSecrets }}
+        - name: bootstrap-secrets
+          projected:
+            sources:
+{{- range .Values.bootstrap.users }}
+{{- if and .passwordFromSecret .passwordFromSecret.name .passwordFromSecret.key }}
+              - secret:
+                  name: {{ .passwordFromSecret.name }}
+                  items:
+                    - key: {{ .passwordFromSecret.key }}
+                      path: {{ .userId }}.password
+{{- end }}
+{{- end }}
+{{- range .Values.bootstrap.repositories.huggingfaceProxy }}
+{{- if and .bearerTokenFromSecret .bearerTokenFromSecret.name .bearerTokenFromSecret.key }}
+              - secret:
+                  name: {{ .bearerTokenFromSecret.name }}
+                  items:
+                    - key: {{ .bearerTokenFromSecret.key }}
+                      path: huggingface-{{ regexReplaceAll "[^a-z0-9]+" (lower .name) "-" | trimAll "-" }}.bearerToken
+{{- end }}
+{{- end }}
+{{- range .Values.bootstrap.repositories.mavenProxy }}
+{{- if and .passwordFromSecret .passwordFromSecret.name .passwordFromSecret.key }}
+              - secret:
+                  name: {{ .passwordFromSecret.name }}
+                  items:
+                    - key: {{ .passwordFromSecret.key }}
+                      path: maven-{{ regexReplaceAll "[^a-z0-9]+" (lower .name) "-" | trimAll "-" }}.password
+{{- end }}
+{{- end }}
+{{ end }}
+{{- end }}

@@ -1,0 +1,49 @@
+# Managed bootstrap example
+
+bootstrap:
+  enabled: true
+  anonymousAccess:
+    enabled: false
+  repositories:
+    pypiProxy:
+      - name: pypi
+        remoteUrl: https://pypi.org/
+        allowAnonymousAccess: false
+    npmProxy:
+      - name: npmjs
+        remoteUrl: https://registry.npmjs.org/
+        allowAnonymousAccess: false
+    dockerProxy:
+      - name: docker-hub
+        remoteUrl: https://registry-1.docker.io
+        indexType: REGISTRY
+        allowAnonymousAccess: false
+        host: docker.example.com
+        port: 5000
+        targetPort: 5000
+        secretName: nexus-docker-hub-tls
+    huggingfaceProxy:
+      - name: huggingface
+        remoteUrl: https://huggingface.co/
+        bearerTokenFromSecret:
+          name: nexus-hf-token
+          key: token
+        allowAnonymousAccess: false
+  users:
+    - userId: developer
+      firstName: Developer
+      lastName: User
+      emailAddress: dev@example.com
+      status: active
+      passwordFromSecret:
+        name: nexus-developer
+        key: password
+      repositoryAccess:
+        pypi:
+          pypi: true
+        npm:
+          npmjs: true
+        docker:
+          docker-hub: true
+        huggingface:
+          huggingface: true
