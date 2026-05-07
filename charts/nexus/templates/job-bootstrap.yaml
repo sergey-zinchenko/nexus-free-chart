@@ -15,6 +15,11 @@
 {{- $hasBootstrapSecrets = true -}}
 {{- end }}
 {{- end }}
+{{- range .Values.bootstrap.repositories.rawProxy }}
+{{- if and .passwordFromSecret .passwordFromSecret.name .passwordFromSecret.key }}
+{{- $hasBootstrapSecrets = true -}}
+{{- end }}
+{{- end }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -115,6 +120,15 @@ spec:
                   items:
                     - key: {{ .passwordFromSecret.key }}
                       path: maven-{{ regexReplaceAll "[^a-z0-9]+" (lower .name) "-" | trimAll "-" }}.password
+{{- end }}
+{{- end }}
+{{- range .Values.bootstrap.repositories.rawProxy }}
+{{- if and .passwordFromSecret .passwordFromSecret.name .passwordFromSecret.key }}
+              - secret:
+                  name: {{ .passwordFromSecret.name }}
+                  items:
+                    - key: {{ .passwordFromSecret.key }}
+                      path: raw-{{ regexReplaceAll "[^a-z0-9]+" (lower .name) "-" | trimAll "-" }}.password
 {{- end }}
 {{- end }}
 {{ end }}

@@ -347,9 +347,33 @@ data:
   {{- end }}
 {{- range $repo := .Values.bootstrap.repositories.rawProxy }}
 
-    cat > "${WORKDIR}/repo-raw-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
-    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation)) "proxy" (dict "remoteUrl" $repo.remoteUrl "contentMaxAge" (default 1440 $repo.contentMaxAge) "metadataMaxAge" (default 1440 $repo.metadataMaxAge)) "negativeCache" (dict "enabled" (default true $repo.negativeCacheEnabled) "timeToLive" (default 1440 $repo.negativeCacheTtl)) "httpClient" (dict "blocked" (default false $repo.httpClientBlocked) "autoBlock" (default true $repo.httpClientAutoBlock)) | toJson }}
+    raw_proxy_password=""
+{{- if and $repo.passwordFromSecret $repo.passwordFromSecret.name $repo.passwordFromSecret.key }}
+    if [ -f "/bootstrap-secrets/raw-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.password" ]; then
+      raw_proxy_password="$(cat /bootstrap-secrets/raw-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.password)"
+    fi
+{{- end }}
+    raw_proxy_username={{ default "" $repo.username | quote }}
+    raw_proxy_username_escaped="$(json_escape "${raw_proxy_username}")"
+    raw_proxy_password_escaped="$(json_escape "${raw_proxy_password}")"
+    raw_auth_fragment=""
+    if [ -n "${raw_proxy_username}" ] && [ -n "${raw_proxy_password}" ]; then
+      raw_auth_fragment=",\"authentication\":{\"type\":\"username\",\"username\":\"${raw_proxy_username_escaped}\",\"password\":\"${raw_proxy_password_escaped}\"}"
+    elif [ -n "${raw_proxy_username}" ] || [ -n "${raw_proxy_password}" ]; then
+      echo "ERROR: raw proxy {{ $repo.name }} requires both username and passwordFromSecret" >&2
+      exit 1
+    fi
+
+    if [ -n "${raw_auth_fragment}" ]; then
+      cat > "${WORKDIR}/repo-raw-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<JSON
+    {"name":{{ $repo.name | quote }},"online":{{ default true $repo.online }},"storage":{"blobStoreName":{{ default "default" $repo.blobStoreName | quote }},"strictContentTypeValidation":{{ default true $repo.strictContentTypeValidation }}},"proxy":{"remoteUrl":{{ $repo.remoteUrl | quote }},"contentMaxAge":{{ default 1440 $repo.contentMaxAge }},"metadataMaxAge":{{ default 1440 $repo.metadataMaxAge }}},"negativeCache":{"enabled":{{ default true $repo.negativeCacheEnabled }},"timeToLive":{{ default 1440 $repo.negativeCacheTtl }}},"httpClient":{"blocked":{{ default false $repo.httpClientBlocked }},"autoBlock":{{ default true $repo.httpClientAutoBlock }}${raw_auth_fragment}},"raw":{"contentDisposition":{{ default "ATTACHMENT" $repo.contentDisposition | quote }}}}
     JSON
+    else
+      cat > "${WORKDIR}/repo-raw-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation)) "proxy" (dict "remoteUrl" $repo.remoteUrl "contentMaxAge" (default 1440 $repo.contentMaxAge) "metadataMaxAge" (default 1440 $repo.metadataMaxAge)) "negativeCache" (dict "enabled" (default true $repo.negativeCacheEnabled) "timeToLive" (default 1440 $repo.negativeCacheTtl)) "httpClient" (dict "blocked" (default false $repo.httpClientBlocked) "autoBlock" (default true $repo.httpClientAutoBlock)) "raw" (dict "contentDisposition" (default "ATTACHMENT" $repo.contentDisposition)) | toJson }}
+    JSON
+    fi
+
     upsert_json_resource "/repositories/raw/proxy/{{ $repo.name }}" "/repositories/raw/proxy" "/repositories/raw/proxy/{{ $repo.name }}" "${WORKDIR}/repo-raw-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" "raw proxy repository {{ $repo.name }}"
     cat > "${WORKDIR}/role-raw-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
     {{ dict "id" (include "nexus.bootstrapRoleId" (dict "format" "raw" "name" $repo.name "access" "read")) "name" (printf "Helm read access for raw repository %s" $repo.name) "description" (printf "Read-only access to raw repository %s managed by Helm" $repo.name) "privileges" (list (printf "nx-repository-view-raw-%s-browse" $repo.name) (printf "nx-repository-view-raw-%s-read" $repo.name)) "roles" (list) | toJson }}

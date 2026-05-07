@@ -629,7 +629,16 @@
                   "negativeCacheEnabled": { "type": "boolean" },
                   "negativeCacheTtl": { "type": "integer", "minimum": -1 },
                   "httpClientBlocked": { "type": "boolean" },
-                  "httpClientAutoBlock": { "type": "boolean" }
+                  "httpClientAutoBlock": { "type": "boolean" },
+                  "username": { "type": "string", "minLength": 1 },
+                  "passwordFromSecret": {
+                    "type": "object",
+                    "properties": {
+                      "name": { "type": "string", "minLength": 1 },
+                      "key": { "type": "string", "minLength": 1 }
+                    }
+                  },
+                  "contentDisposition": { "type": "string", "enum": ["ATTACHMENT", "INLINE"] }
                 },
                 "required": ["name", "remoteUrl"]
               }

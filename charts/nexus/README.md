@@ -137,7 +137,30 @@ bootstrap:
     bearerTokenFromSecret:
      name: nexus-hf-token
      key: token
+  rawProxy:
+   - name: alpine
+    remoteUrl: https://dl-cdn.alpinelinux.org/alpine/
+    strictContentTypeValidation: false
+    contentMaxAge: -1
+    metadataMaxAge: 1440
+    negativeCacheEnabled: true
+    negativeCacheTtl: 1440
+    httpClientBlocked: false
+    httpClientAutoBlock: false
+    contentDisposition: ATTACHMENT
+    # Optional auth for private mirrors:
+    # username: mirror-user
+    # passwordFromSecret:
+    #  name: alpine-mirror-credentials
+    #  key: password
 ```
+
+For Alpine/APK proxying with `rawProxy`, the minimum recommended settings are:
+
+- `strictContentTypeValidation: false`
+- `contentDisposition: ATTACHMENT`
+- cache tuning via `contentMaxAge`, `metadataMaxAge`, `negativeCache*`
+- optional upstream auth via `username` + `passwordFromSecret`
 
 ## Monitoring
 

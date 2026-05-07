@@ -29,6 +29,24 @@ bootstrap:
           name: nexus-hf-token
           key: token
         allowAnonymousAccess: false
+    rawProxy:
+      - name: alpine
+        remoteUrl: https://dl-cdn.alpinelinux.org/alpine/
+        # For APK index/files via raw proxy, these settings are usually required.
+        strictContentTypeValidation: false
+        contentMaxAge: -1
+        metadataMaxAge: 1440
+        negativeCacheEnabled: true
+        negativeCacheTtl: 1440
+        httpClientBlocked: false
+        httpClientAutoBlock: false
+        contentDisposition: ATTACHMENT
+        allowAnonymousAccess: false
+        # Optional upstream auth for private mirrors.
+        # username: mirror-user
+        # passwordFromSecret:
+        #   name: alpine-mirror-credentials
+        #   key: password
   users:
     - userId: developer
       firstName: Developer

@@ -1,6 +1,6 @@
 apiVersion: v2
 name: nexus-free
-version: 1.0.1
+version: 1.0.2
 appVersion: "3.90.1"
 kubeVersion: ">=1.25.0-0"
 description: A production-oriented Helm chart for Nexus Repository Community Edition with PostgreSQL
@@ -24,9 +24,9 @@ annotations:
   artifacthub.io/license: Apache-2.0
   artifacthub.io/changes: |
     - kind: added
-      description: Added open-source release package files, examples, and release workflows.
+      description: Added Alpine APK proxy bootstrap example using raw repositories.
     - kind: changed
-      description: Updated README and publishing guidance for OCI distribution.
+      description: Extended raw proxy bootstrap support with optional upstream authentication and contentDisposition settings.
   artifacthub.io/links: |
     - name: Chart Repository
       url: https://github.com/sergey-zinchenko/nexus-free-chart
