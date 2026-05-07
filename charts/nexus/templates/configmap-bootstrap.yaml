@@ -347,6 +347,8 @@ data:
   {{- end }}
 {{- range $repo := .Values.bootstrap.repositories.rawProxy }}
 
+    raw_proxy_strict_content_type_validation={{ ternary $repo.strictContentTypeValidation true (hasKey $repo "strictContentTypeValidation") }}
+
     raw_proxy_password=""
 {{- if and $repo.passwordFromSecret $repo.passwordFromSecret.name $repo.passwordFromSecret.key }}
     if [ -f "/bootstrap-secrets/raw-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.password" ]; then
@@ -366,11 +368,11 @@ data:
 
     if [ -n "${raw_auth_fragment}" ]; then
       cat > "${WORKDIR}/repo-raw-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<JSON
-    {"name":{{ $repo.name | quote }},"online":{{ default true $repo.online }},"storage":{"blobStoreName":{{ default "default" $repo.blobStoreName | quote }},"strictContentTypeValidation":{{ default true $repo.strictContentTypeValidation }}},"proxy":{"remoteUrl":{{ $repo.remoteUrl | quote }},"contentMaxAge":{{ default 1440 $repo.contentMaxAge }},"metadataMaxAge":{{ default 1440 $repo.metadataMaxAge }}},"negativeCache":{"enabled":{{ default true $repo.negativeCacheEnabled }},"timeToLive":{{ default 1440 $repo.negativeCacheTtl }}},"httpClient":{"blocked":{{ default false $repo.httpClientBlocked }},"autoBlock":{{ default true $repo.httpClientAutoBlock }}${raw_auth_fragment}},"raw":{"contentDisposition":{{ default "ATTACHMENT" $repo.contentDisposition | quote }}}}
+    {"name":{{ $repo.name | quote }},"online":{{ default true $repo.online }},"storage":{"blobStoreName":{{ default "default" $repo.blobStoreName | quote }},"strictContentTypeValidation":${raw_proxy_strict_content_type_validation}},"proxy":{"remoteUrl":{{ $repo.remoteUrl | quote }},"contentMaxAge":{{ default 1440 $repo.contentMaxAge }},"metadataMaxAge":{{ default 1440 $repo.metadataMaxAge }}},"negativeCache":{"enabled":{{ default true $repo.negativeCacheEnabled }},"timeToLive":{{ default 1440 $repo.negativeCacheTtl }}},"httpClient":{"blocked":{{ default false $repo.httpClientBlocked }},"autoBlock":{{ default true $repo.httpClientAutoBlock }}${raw_auth_fragment}},"raw":{"contentDisposition":{{ default "ATTACHMENT" $repo.contentDisposition | quote }}}}
     JSON
     else
       cat > "${WORKDIR}/repo-raw-{{ regexReplaceAll "[^a-z0-9]+" (lower $repo.name) "-" | trimAll "-" }}.json" <<'JSON'
-    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (default true $repo.strictContentTypeValidation)) "proxy" (dict "remoteUrl" $repo.remoteUrl "contentMaxAge" (default 1440 $repo.contentMaxAge) "metadataMaxAge" (default 1440 $repo.metadataMaxAge)) "negativeCache" (dict "enabled" (default true $repo.negativeCacheEnabled) "timeToLive" (default 1440 $repo.negativeCacheTtl)) "httpClient" (dict "blocked" (default false $repo.httpClientBlocked) "autoBlock" (default true $repo.httpClientAutoBlock)) "raw" (dict "contentDisposition" (default "ATTACHMENT" $repo.contentDisposition)) | toJson }}
+    {{ dict "name" $repo.name "online" (default true $repo.online) "storage" (dict "blobStoreName" (default "default" $repo.blobStoreName) "strictContentTypeValidation" (ternary $repo.strictContentTypeValidation true (hasKey $repo "strictContentTypeValidation"))) "proxy" (dict "remoteUrl" $repo.remoteUrl "contentMaxAge" (default 1440 $repo.contentMaxAge) "metadataMaxAge" (default 1440 $repo.metadataMaxAge)) "negativeCache" (dict "enabled" (default true $repo.negativeCacheEnabled) "timeToLive" (default 1440 $repo.negativeCacheTtl)) "httpClient" (dict "blocked" (default false $repo.httpClientBlocked) "autoBlock" (default true $repo.httpClientAutoBlock)) "raw" (dict "contentDisposition" (default "ATTACHMENT" $repo.contentDisposition)) | toJson }}
     JSON
     fi
 
